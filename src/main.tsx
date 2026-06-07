@@ -213,6 +213,14 @@ type RuleOptimizationSuggestion = {
   hitCount: number;
   reason: string;
   samples: string[];
+  conflict: RuleConflictCheck;
+};
+
+type RuleConflictCheck = {
+  level: "低" | "中" | "高";
+  summary: string;
+  keywordOverlaps: string[];
+  affectedItems: string[];
 };
 
 type DrillRecord = {
@@ -714,7 +722,33 @@ function extractRuleKeywords(item: AssignmentSuggestionItem) {
   return Array.from(new Set([...matchedKnown, ...category, ...words])).slice(0, 6);
 }
 
-function buildRuleOptimizationSuggestions(items: AssignmentSuggestionItem[], config: ProjectConfig): RuleOptimizationSuggestion[] {
+function buildRuleConflictCheck(suggestion: Omit<RuleOptimizationSuggestion, "conflict">, config: ProjectConfig, allItems: AssignmentSuggestionItem[]): RuleConflictCheck {
+  const existingRules = config.assignmentRules?.keywordRules || [];
+  const keywordOverlaps = existingRules.flatMap((rule) => {
+    const overlaps = suggestion.keywords.filter((keyword) =>
+      rule.keywords.some((ruleKeyword) => keyword === ruleKeyword || keyword.includes(ruleKeyword) || ruleKeyword.includes(keyword))
+    );
+    return overlaps.map((keyword) => `${keyword} 已接近 ${rule.label}`);
+  });
+  const affectedItems = allItems
+    .filter((item) => item.ruleId !== "default" && item.owner !== suggestion.owner)
+    .filter((item) => {
+      const text = `${item.category}${item.title}${item.description}${item.location}`;
+      return suggestion.keywords.some((keyword) => text.includes(keyword));
+    })
+    .slice(0, 4)
+    .map((item) => `${item.code} 原命中 ${item.ruleLabel} 到 ${item.owner}`);
+  const level = affectedItems.length > 0 ? "高" : keywordOverlaps.length > 0 ? "中" : "低";
+  const summary =
+    level === "高"
+      ? "可能抢走已分派给其他责任人的隐患，建议先调整关键词或人工确认"
+      : level === "中"
+        ? "关键词和已有规则有重叠，建议确认是否需要合并或改窄"
+        : "未发现明显冲突，可直接加入客户模板";
+  return { level, summary, keywordOverlaps, affectedItems };
+}
+
+function buildRuleOptimizationSuggestions(items: AssignmentSuggestionItem[], config: ProjectConfig, allItems: AssignmentSuggestionItem[]): RuleOptimizationSuggestion[] {
   const fallbackOwner = config.assignmentRules?.fallbackOwner || config.owners.find((owner) => owner !== "待分派") || config.maintainerName;
   const fallbackReviewer = config.assignmentRules?.fallbackReviewer || config.reviewers[0] || config.maintainerName;
   const fallbackDueDays = config.assignmentRules?.dueDays || 7;
@@ -736,7 +770,7 @@ function buildRuleOptimizationSuggestions(items: AssignmentSuggestionItem[], con
         .map(([keyword]) => keyword)
         .filter((keyword) => keyword !== primary);
       const keywords = [primary, ...rankedKeywords].slice(0, 5);
-      return {
+      const suggestion = {
         id: `suggest-${primary.replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, "").slice(0, 12) || "rule"}`,
         label: `${primary}规则建议`,
         keywords,
@@ -747,6 +781,7 @@ function buildRuleOptimizationSuggestions(items: AssignmentSuggestionItem[], con
         reason: `${group.samples.length} 条未命中隐患包含“${keywords.slice(0, 3).join("、")}”，建议新增独立规则`,
         samples: group.samples.slice(0, 3).map((item) => `${item.code} ${item.title}`)
       };
+      return { ...suggestion, conflict: buildRuleConflictCheck(suggestion, config, allItems) };
     })
     .filter((suggestion) => suggestion.keywords.length > 0)
     .sort((a, b) => b.hitCount - a.hitCount || a.label.localeCompare(b.label, "zh-CN"))
@@ -764,7 +799,7 @@ function buildRuleQualityReport(items: AssignmentSuggestionItem[], config: Proje
   const topRules = Object.values(counts).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "zh-CN"));
   const unmatchedItems = items.filter((item) => item.ruleId === "default");
   const silentRules = configuredRules.filter((rule) => !hitRules.has(rule.id));
-  const optimizationSuggestions = buildRuleOptimizationSuggestions(unmatchedItems, config);
+  const optimizationSuggestions = buildRuleOptimizationSuggestions(unmatchedItems, config, items);
   return {
     total: items.length,
     matched: items.length - unmatchedItems.length,
@@ -1085,6 +1120,10 @@ function App() {
   }
 
   function applyRuleOptimizationSuggestion(suggestion: RuleOptimizationSuggestion) {
+    if (suggestion.conflict.level === "高") {
+      setNotice(`规则冲突风险高：${suggestion.conflict.summary}。请先缩窄关键词后再加入模板。`);
+      return;
+    }
     const currentRules = projectConfig.assignmentRules || defaultProjectConfig.assignmentRules!;
     const nextRule: AssignmentRule = {
       id: `${suggestion.id}-${Date.now()}`,
@@ -2570,12 +2609,19 @@ function CustomerOnboardingPanel({
                           <p>{item.reason}</p>
                           <small>{item.samples.join("；")}</small>
                         </div>
+                        <div className={`conflict-box ${item.conflict.level === "高" ? "high" : item.conflict.level === "中" ? "medium" : "low"}`}>
+                          <strong>冲突风险：{item.conflict.level}</strong>
+                          <p>{item.conflict.summary}</p>
+                          {[...item.conflict.keywordOverlaps, ...item.conflict.affectedItems].slice(0, 3).map((message) => (
+                            <small key={`${item.id}-${message}`}>{message}</small>
+                          ))}
+                        </div>
                         <div className="optimization-tags">
                           {item.keywords.map((keyword) => (
                             <span key={`${item.id}-${keyword}`}>{keyword}</span>
                           ))}
                         </div>
-                        <button className="ghost compact" onClick={() => onApplyOptimizationSuggestion(item)}>
+                        <button className="ghost compact" disabled={item.conflict.level === "高"} onClick={() => onApplyOptimizationSuggestion(item)}>
                           <Plus size={15} />
                           加入规则
                         </button>

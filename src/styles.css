@@ -411,6 +411,35 @@ h1 {
   font-weight: 800;
 }
 
+.conflict-box {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.conflict-box p,
+.conflict-box small {
+  margin: 0;
+  line-height: 1.42;
+}
+
+.conflict-box.low {
+  color: #176256;
+  background: #edf9f5;
+}
+
+.conflict-box.medium {
+  color: #795300;
+  background: #fff8e3;
+}
+
+.conflict-box.high {
+  color: #963126;
+  background: #fff2f0;
+}
+
 .optimization-empty {
   padding: 8px;
   border-radius: 7px;
