@@ -9,4 +9,5 @@ server/uploads-test.txt
 server/uploads/
 data/*.tmp
 data/notifications.json
+data/project-config.json
 backups/

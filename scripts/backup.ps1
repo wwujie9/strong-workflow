@@ -33,6 +33,7 @@ New-Item -ItemType Directory -Path (Join-Path $stageDir "server") | Out-Null
 
 $dataFile = Join-Path $Root "data\hazards.json"
 $notificationFile = Join-Path $Root "data\notifications.json"
+$projectConfigFile = Join-Path $Root "data\project-config.json"
 $uploadDir = Join-Path $Root "server\uploads"
 
 if (Test-Path $dataFile) {
@@ -40,6 +41,9 @@ if (Test-Path $dataFile) {
 }
 if (Test-Path $notificationFile) {
   Copy-Item -LiteralPath $notificationFile -Destination (Join-Path $stageDir "data\notifications.json") -Force
+}
+if (Test-Path $projectConfigFile) {
+  Copy-Item -LiteralPath $projectConfigFile -Destination (Join-Path $stageDir "data\project-config.json") -Force
 }
 if (Test-Path $uploadDir) {
   Copy-Item -LiteralPath $uploadDir -Destination (Join-Path $stageDir "server\uploads") -Recurse -Force
@@ -51,6 +55,7 @@ $manifest = [ordered]@{
   root = $Root
   dataFile = $dataFile
   notificationFile = $notificationFile
+  projectConfigFile = $projectConfigFile
   uploadDir = $uploadDir
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $stageDir "manifest.json") -Encoding utf8

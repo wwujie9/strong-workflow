@@ -73,6 +73,7 @@ type HealthState = {
   port: number;
   publicBaseUrl: string;
   dataFile: string;
+  projectConfigFile?: string;
   uploadDir: string;
   maxUploadMb: number;
   allowedOrigins: string[];
@@ -115,8 +116,24 @@ type ProjectConfig = {
 
 type CsvImportState = {
   fileName: string;
+  headers: string[];
+  mapping: CsvFieldMapping;
   hazards: Hazard[];
+  issues: CsvValidationIssue[];
   invalidRows: string[];
+  unknownOwners: string[];
+  unknownReviewers: string[];
+};
+
+type CsvFieldKey = "code" | "project" | "location" | "category" | "title" | "description" | "suggestion" | "severity" | "owner" | "reviewer" | "due" | "beforeEvidence";
+
+type CsvFieldMapping = Record<CsvFieldKey, string>;
+
+type CsvValidationIssue = {
+  row: number;
+  field: string;
+  message: string;
+  level: "error" | "warning";
 };
 
 const API_BASE = (import.meta.env.VITE_API_BASE || (window.location.port === "5173" ? "http://127.0.0.1:5174/api" : "/api")).replace(/\/$/, "");
@@ -141,6 +158,38 @@ const defaultProjectConfig: ProjectConfig = {
   owners: ["待分派", "物业工程-陈工", "物业客服-沈主管", "外包维修-赵师傅", "租户负责人-王店长", "仓储主管-刘主管", "维保项目-李工"],
   reviewers: ["安全负责人-周经理", "维保项目-李工", "园区安全-林主管", "物业经理-黄经理"]
 };
+
+const csvFieldLabels: Record<CsvFieldKey, string> = {
+  code: "编号",
+  project: "项目",
+  location: "点位",
+  category: "隐患类型",
+  title: "标题",
+  description: "问题描述",
+  suggestion: "整改建议",
+  severity: "风险等级",
+  owner: "责任人",
+  reviewer: "复核人",
+  due: "期限",
+  beforeEvidence: "整改前证据"
+};
+
+const csvFieldAliases: Record<CsvFieldKey, string[]> = {
+  code: ["编号", "单号", "隐患编号", "code", "id"],
+  project: ["项目", "项目名称", "客户项目", "project"],
+  location: ["点位", "位置", "区域", "楼层位置", "location", "area"],
+  category: ["隐患类型", "类型", "类别", "category", "type"],
+  title: ["标题", "隐患标题", "问题标题", "title"],
+  description: ["问题描述", "描述", "隐患描述", "检查问题", "description", "desc"],
+  suggestion: ["整改建议", "建议", "整改要求", "处理建议", "suggestion"],
+  severity: ["风险等级", "等级", "风险级别", "severity", "risk"],
+  owner: ["责任人", "整改责任人", "负责人", "owner", "assignee"],
+  reviewer: ["复核人", "验收人", "检查人", "reviewer", "checker"],
+  due: ["整改期限", "期限", "截止日期", "due", "deadline"],
+  beforeEvidence: ["整改前证据", "证据", "现场证据", "照片", "beforeEvidence", "evidence"]
+};
+
+const csvFields = Object.keys(csvFieldLabels) as CsvFieldKey[];
 
 const initialHazards: Hazard[] = [
   {
@@ -355,9 +404,33 @@ function useStoredProjectConfig() {
       return defaultProjectConfig;
     }
   });
+  const apiLoaded = useRef(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/project-config`)
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("config unavailable"))))
+      .then((remoteConfig: ProjectConfig) => {
+        setConfig({
+          ...defaultProjectConfig,
+          ...remoteConfig,
+          owners: normalizeNameList(remoteConfig.owners || defaultProjectConfig.owners, true),
+          reviewers: normalizeNameList(remoteConfig.reviewers || defaultProjectConfig.reviewers)
+        });
+        apiLoaded.current = true;
+      })
+      .catch(() => {
+        apiLoaded.current = true;
+      });
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem("fire-closure-project-config", JSON.stringify(config));
+    if (!apiLoaded.current) return;
+    fetch(`${API_BASE}/project-config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config)
+    }).catch(() => undefined);
   }, [config]);
 
   return [config, setConfig] as const;
@@ -409,10 +482,29 @@ function splitCsvRows(text: string) {
   return rows;
 }
 
-function getCsvValue(row: Record<string, string>, names: string[]) {
-  const keys = Object.keys(row);
-  const key = keys.find((item) => names.some((name) => item.toLowerCase() === name.toLowerCase()));
-  return key ? row[key].trim() : "";
+function emptyCsvMapping(): CsvFieldMapping {
+  return csvFields.reduce((acc, field) => ({ ...acc, [field]: "" }), {} as CsvFieldMapping);
+}
+
+function detectCsvMapping(headers: string[]): CsvFieldMapping {
+  const normalizedHeaders = headers.map((header) => ({ raw: header, normalized: header.trim().toLowerCase() }));
+  return csvFields.reduce((mapping, field) => {
+    const aliases = csvFieldAliases[field].map((alias) => alias.toLowerCase());
+    const exact = normalizedHeaders.find((header) => aliases.includes(header.normalized));
+    const fuzzy = exact || normalizedHeaders.find((header) => aliases.some((alias) => header.normalized.includes(alias) || alias.includes(header.normalized)));
+    return { ...mapping, [field]: fuzzy?.raw || "" };
+  }, emptyCsvMapping());
+}
+
+function isValidDateText(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00+08:00`);
+  return !Number.isNaN(date.getTime());
+}
+
+function getMappedCsvValue(row: Record<string, string>, mapping: CsvFieldMapping, field: CsvFieldKey) {
+  const header = mapping[field];
+  return header ? (row[header] || "").trim() : "";
 }
 
 function normalizeSeverity(value: string, fallbackText: string): Severity {
@@ -422,31 +514,36 @@ function normalizeSeverity(value: string, fallbackText: string): Severity {
   return inferSeverity(fallbackText);
 }
 
-function createHazardFromCsvRow(row: Record<string, string>, index: number, config: ProjectConfig, existingCount: number): Hazard | null {
-  const description = getCsvValue(row, ["问题描述", "描述", "description", "desc"]);
-  const title = getCsvValue(row, ["标题", "隐患标题", "title"]);
-  const location = getCsvValue(row, ["点位", "位置", "location", "area"]);
+function createHazardFromCsvRow(
+  row: Record<string, string>,
+  index: number,
+  config: ProjectConfig,
+  existingCount: number,
+  mapping: CsvFieldMapping
+): Hazard {
+  const description = getMappedCsvValue(row, mapping, "description");
+  const title = getMappedCsvValue(row, mapping, "title");
+  const location = getMappedCsvValue(row, mapping, "location");
   const sourceText = `${title}${location}${description}`;
-  if (!description && !title && !location) return null;
 
   const next = existingCount + index + 1;
-  const category = getCsvValue(row, ["隐患类型", "类型", "category", "type"]) || inferCategory(sourceText);
-  const severity = normalizeSeverity(getCsvValue(row, ["风险等级", "等级", "severity", "risk"]), sourceText);
-  const code = getCsvValue(row, ["编号", "单号", "code", "id"]) || `XF-IMP-${String(next).padStart(3, "0")}`;
-  const owner = getCsvValue(row, ["责任人", "owner", "assignee"]) || config.owners.find((item) => item !== "待分派") || "待分派";
-  const reviewer = getCsvValue(row, ["复核人", "reviewer", "checker"]) || config.reviewers[0] || config.maintainerName;
-  const due = getCsvValue(row, ["整改期限", "期限", "due", "deadline"]) || config.defaultDue;
-  const beforeEvidence = getCsvValue(row, ["整改前证据", "证据", "beforeEvidence", "evidence"]);
+  const category = getMappedCsvValue(row, mapping, "category") || inferCategory(sourceText);
+  const severity = normalizeSeverity(getMappedCsvValue(row, mapping, "severity"), sourceText);
+  const code = getMappedCsvValue(row, mapping, "code") || `XF-IMP-${String(next).padStart(3, "0")}`;
+  const owner = getMappedCsvValue(row, mapping, "owner") || config.owners.find((item) => item !== "待分派") || "待分派";
+  const reviewer = getMappedCsvValue(row, mapping, "reviewer") || config.reviewers[0] || config.maintainerName;
+  const due = getMappedCsvValue(row, mapping, "due") || config.defaultDue;
+  const beforeEvidence = getMappedCsvValue(row, mapping, "beforeEvidence");
 
   return {
     id: `csv-${Date.now()}-${index}`,
     code,
-    project: getCsvValue(row, ["项目", "项目名称", "project"]) || config.projectName,
+    project: getMappedCsvValue(row, mapping, "project") || config.projectName,
     location: location || "待确认点位",
     category,
     title: title || `${category}隐患整改`,
     description: description || sourceText || "历史台账导入隐患，请补充问题描述。",
-    suggestion: getCsvValue(row, ["整改建议", "建议", "suggestion"]) || "请按维保建议完成整改，并提交整改后照片/视频。",
+    suggestion: getMappedCsvValue(row, mapping, "suggestion") || "请按维保建议完成整改，并提交整改后照片/视频。",
     status: "待分派",
     severity,
     owner,
@@ -456,6 +553,66 @@ function createHazardFromCsvRow(row: Record<string, string>, index: number, conf
     afterEvidence: [],
     updated: "刚刚",
     logs: ["CSV 台账导入预览确认后生成，等待分派或整改"]
+  };
+}
+
+function buildCsvImportState({
+  fileName,
+  headers,
+  rows,
+  mapping,
+  config,
+  existingHazards
+}: {
+  fileName: string;
+  headers: string[];
+  rows: Record<string, string>[];
+  mapping: CsvFieldMapping;
+  config: ProjectConfig;
+  existingHazards: Hazard[];
+}): CsvImportState {
+  const issues: CsvValidationIssue[] = [];
+  const hazards: Hazard[] = [];
+  const seenCodes = new Set(existingHazards.map((hazard) => hazard.code));
+  const ownerSet = new Set(normalizeNameList(config.owners, true));
+  const reviewerSet = new Set(normalizeNameList(config.reviewers));
+  const unknownOwners = new Set<string>();
+  const unknownReviewers = new Set<string>();
+
+  rows.forEach((row, index) => {
+    const rowNumber = index + 2;
+    const values = csvFields.reduce((acc, field) => ({ ...acc, [field]: getMappedCsvValue(row, mapping, field) }), {} as Record<CsvFieldKey, string>);
+    if (!Object.values(values).some(Boolean)) return;
+
+    if (!values.location) issues.push({ row: rowNumber, field: "点位", message: "点位不能为空", level: "error" });
+    if (!values.title && !values.description) issues.push({ row: rowNumber, field: "标题/描述", message: "标题和问题描述至少填一项", level: "error" });
+    if (values.due && !isValidDateText(values.due)) issues.push({ row: rowNumber, field: "期限", message: "期限必须是 YYYY-MM-DD", level: "error" });
+    if (values.code && seenCodes.has(values.code)) issues.push({ row: rowNumber, field: "编号", message: `编号重复：${values.code}`, level: "error" });
+    if (values.owner && !ownerSet.has(values.owner)) {
+      unknownOwners.add(values.owner);
+      issues.push({ row: rowNumber, field: "责任人", message: `责任人不在项目名单：${values.owner}`, level: "warning" });
+    }
+    if (values.reviewer && !reviewerSet.has(values.reviewer)) {
+      unknownReviewers.add(values.reviewer);
+      issues.push({ row: rowNumber, field: "复核人", message: `复核人不在项目名单：${values.reviewer}`, level: "warning" });
+    }
+
+    const rowErrors = issues.some((issue) => issue.row === rowNumber && issue.level === "error");
+    if (rowErrors) return;
+    const hazard = createHazardFromCsvRow(row, index, config, existingHazards.length, mapping);
+    seenCodes.add(hazard.code);
+    hazards.push(hazard);
+  });
+
+  return {
+    fileName,
+    headers,
+    mapping,
+    hazards,
+    issues,
+    invalidRows: issues.filter((issue) => issue.level === "error").map((issue) => `第 ${issue.row} 行 ${issue.field}：${issue.message}`),
+    unknownOwners: Array.from(unknownOwners),
+    unknownReviewers: Array.from(unknownReviewers)
   };
 }
 
@@ -476,6 +633,7 @@ function App() {
   const [batchReviewer, setBatchReviewer] = useState(defaultProjectConfig.reviewers[0]);
   const [batchDue, setBatchDue] = useState(defaultProjectConfig.defaultDue);
   const [csvImport, setCsvImport] = useState<CsvImportState | null>(null);
+  const [csvRows, setCsvRows] = useState<Record<string, string>[]>([]);
   const [route, setRoute] = useState<RouteState>(() => parseRoute());
 
   const ownerOptions = useMemo(() => normalizeNameList(projectConfig.owners, true), [projectConfig.owners]);
@@ -535,31 +693,73 @@ function App() {
         return;
       }
       const headers = rows[0].map((header) => header.trim());
-      const invalidRows: string[] = [];
-      const created = rows
-        .slice(1)
-        .map((values, index) => {
-          const row = headers.reduce<Record<string, string>>((acc, header, headerIndex) => {
-            acc[header] = values[headerIndex] || "";
-            return acc;
-          }, {});
-          const hazard = createHazardFromCsvRow(row, index, projectConfig, hazards.length);
-          if (!hazard) invalidRows.push(`第 ${index + 2} 行缺少标题、点位和描述`);
-          return hazard;
-        })
-        .filter((hazard): hazard is Hazard => Boolean(hazard));
-
-      setCsvImport({ fileName: file.name, hazards: created, invalidRows });
-      setNotice(`已解析 ${created.length} 条隐患，${invalidRows.length} 行需要检查。确认后才会写入工作流。`);
+      const parsedRows = rows.slice(1).map((values) =>
+        headers.reduce<Record<string, string>>((acc, header, headerIndex) => {
+          acc[header] = values[headerIndex] || "";
+          return acc;
+        }, {})
+      );
+      const nextImport = buildCsvImportState({
+        fileName: file.name,
+        headers,
+        rows: parsedRows,
+        mapping: detectCsvMapping(headers),
+        config: projectConfig,
+        existingHazards: hazards
+      });
+      setCsvRows(parsedRows);
+      setCsvImport(nextImport);
+      setNotice(`已解析 ${nextImport.hazards.length} 条可导入隐患，发现 ${nextImport.issues.length} 个校验提示。确认后才会写入工作流。`);
     } catch {
       setNotice("CSV 解析失败，请确认文件为 UTF-8 编码且使用英文逗号分隔。");
       setCsvImport(null);
     }
   }
 
+  function updateCsvMapping(field: CsvFieldKey, header: string) {
+    if (!csvImport) return;
+    const nextImport = buildCsvImportState({
+      fileName: csvImport.fileName,
+      headers: csvImport.headers,
+      rows: csvRows,
+      mapping: { ...csvImport.mapping, [field]: header },
+      config: projectConfig,
+      existingHazards: hazards
+    });
+    setCsvImport(nextImport);
+    setNotice(`字段映射已更新：${nextImport.hazards.length} 条可导入，${nextImport.invalidRows.length} 个阻断问题。`);
+  }
+
+  function addCsvPeopleToConfig() {
+    if (!csvImport) return;
+    setProjectConfig({
+      ...projectConfig,
+      owners: normalizeNameList([...projectConfig.owners, ...csvImport.unknownOwners], true),
+      reviewers: normalizeNameList([...projectConfig.reviewers, ...csvImport.unknownReviewers])
+    });
+    const nextImport = buildCsvImportState({
+      fileName: csvImport.fileName,
+      headers: csvImport.headers,
+      rows: csvRows,
+      mapping: csvImport.mapping,
+      config: {
+        ...projectConfig,
+        owners: normalizeNameList([...projectConfig.owners, ...csvImport.unknownOwners], true),
+        reviewers: normalizeNameList([...projectConfig.reviewers, ...csvImport.unknownReviewers])
+      },
+      existingHazards: hazards
+    });
+    setCsvImport(nextImport);
+    setNotice("已把 CSV 中的新责任人/复核人加入项目名单。");
+  }
+
   function confirmCsvImport(mode: "append" | "replace") {
     if (!csvImport || csvImport.hazards.length === 0) {
       setNotice("没有可导入的隐患数据。");
+      return;
+    }
+    if (csvImport.invalidRows.length > 0) {
+      setNotice(`CSV 仍有 ${csvImport.invalidRows.length} 个阻断问题，请先修正字段映射或源文件。`);
       return;
     }
     const nextHazards = mode === "replace" ? csvImport.hazards : [...csvImport.hazards, ...hazards];
@@ -570,6 +770,7 @@ function App() {
     );
     setNotice(`CSV 导入完成：${csvImport.hazards.length} 条隐患已进入工作流。`);
     setCsvImport(null);
+    setCsvRows([]);
   }
 
   function downloadCsvTemplate() {
@@ -600,6 +801,50 @@ function App() {
     anchor.click();
     anchor.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 300);
+  }
+
+  async function exportProjectConfig() {
+    try {
+      const response = await fetch(`${API_BASE}/project-config/export`);
+      const payload = response.ok
+        ? await response.json()
+        : { kind: "strong-workflow.project-config", version: 1, exportedAt: new Date().toISOString(), config: projectConfig };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${projectConfig.customerName || "客户"}-工作流项目配置.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 300);
+      setNotice("项目配置已导出，下一家客户可直接导入复用。");
+    } catch {
+      setNotice("配置导出失败，请确认 API 服务已启动。");
+    }
+  }
+
+  async function importProjectConfig(file: File) {
+    try {
+      const payload = JSON.parse(await file.text()) as { config?: ProjectConfig } & Partial<ProjectConfig>;
+      const nextConfig = payload.config || (payload as ProjectConfig);
+      const response = await fetch(`${API_BASE}/project-config/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nextConfig)
+      });
+      const result = (await response.json()) as { config?: ProjectConfig; error?: string };
+      if (!response.ok || !result.config) throw new Error(result.error || "config import failed");
+      setProjectConfig({
+        ...defaultProjectConfig,
+        ...result.config,
+        owners: normalizeNameList(result.config.owners || defaultProjectConfig.owners, true),
+        reviewers: normalizeNameList(result.config.reviewers || defaultProjectConfig.reviewers)
+      });
+      setNotice(`已导入项目配置：${result.config.projectName}`);
+    } catch {
+      setNotice("配置导入失败，请确认 JSON 包格式正确，且默认期限为 YYYY-MM-DD。");
+    }
   }
 
   if (!selected) {
@@ -1238,13 +1483,15 @@ function App() {
 
       <ConfigPanel health={health} onRefresh={refreshHealth} onRunReminder={runAutoReminder} />
 
-      <ProjectSetupPanel config={projectConfig} onChange={setProjectConfig} />
+      <ProjectSetupPanel config={projectConfig} onChange={setProjectConfig} onExport={exportProjectConfig} onImport={importProjectConfig} />
       <CsvImportPanel
         importState={csvImport}
+        onAddPeople={addCsvPeopleToConfig}
         onAppend={() => confirmCsvImport("append")}
         onCancel={() => setCsvImport(null)}
         onDownloadTemplate={downloadCsvTemplate}
         onFileSelect={previewCsvImport}
+        onMappingChange={updateCsvMapping}
         onReplace={() => confirmCsvImport("replace")}
       />
 
@@ -1610,7 +1857,17 @@ function PortalView({
   );
 }
 
-function ProjectSetupPanel({ config, onChange }: { config: ProjectConfig; onChange: (config: ProjectConfig) => void }) {
+function ProjectSetupPanel({
+  config,
+  onChange,
+  onExport,
+  onImport
+}: {
+  config: ProjectConfig;
+  onChange: (config: ProjectConfig) => void;
+  onExport: () => void;
+  onImport: (file: File) => void;
+}) {
   function patchConfig(partial: Partial<ProjectConfig>) {
     onChange({ ...config, ...partial });
   }
@@ -1621,6 +1878,25 @@ function ProjectSetupPanel({ config, onChange }: { config: ProjectConfig; onChan
         <div>
           <h2>项目初始化</h2>
           <p>按客户现有组织方式配置项目、维保方、责任人和复核人，后续导入/分派自动沿用</p>
+        </div>
+        <div className="inline-actions">
+          <button className="ghost compact" onClick={onExport}>
+            <FileDown size={16} />
+            导出配置
+          </button>
+          <label className="file-upload compact-upload">
+            <Upload size={15} />
+            导入配置
+            <input
+              type="file"
+              accept="application/json,.json"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) onImport(file);
+                event.currentTarget.value = "";
+              }}
+            />
+          </label>
         </div>
         <Settings size={20} />
       </div>
@@ -1653,19 +1929,25 @@ function ProjectSetupPanel({ config, onChange }: { config: ProjectConfig; onChan
 
 function CsvImportPanel({
   importState,
+  onAddPeople,
   onAppend,
   onCancel,
   onDownloadTemplate,
   onFileSelect,
+  onMappingChange,
   onReplace
 }: {
   importState: CsvImportState | null;
+  onAddPeople: () => void;
   onAppend: () => void;
   onCancel: () => void;
   onDownloadTemplate: () => void;
   onFileSelect: (file: File) => void;
+  onMappingChange: (field: CsvFieldKey, header: string) => void;
   onReplace: () => void;
 }) {
+  const blockingCount = importState?.issues.filter((issue) => issue.level === "error").length || 0;
+  const warningCount = importState?.issues.filter((issue) => issue.level === "warning").length || 0;
   return (
     <section className="panel import-panel">
       <div className="panel-head tight">
@@ -1698,7 +1980,20 @@ function CsvImportPanel({
         <div className="import-preview">
           <div className="import-summary">
             <strong>{importState.fileName}</strong>
-            <span>有效 {importState.hazards.length} 条 · 异常 {importState.invalidRows.length} 行</span>
+            <span>可导入 {importState.hazards.length} 条 · 阻断 {blockingCount} 个 · 提醒 {warningCount} 个</span>
+          </div>
+          <div className="mapping-grid">
+            {csvFields.map((field) => (
+              <label className="field compact-field" key={field}>
+                <span>{csvFieldLabels[field]}</span>
+                <select value={importState.mapping[field]} onChange={(event) => onMappingChange(field, event.target.value)}>
+                  <option value="">未映射</option>
+                  {importState.headers.map((header) => (
+                    <option key={`${field}-${header}`} value={header}>{header}</option>
+                  ))}
+                </select>
+              </label>
+            ))}
           </div>
           <div className="preview-table">
             {importState.hazards.slice(0, 6).map((hazard) => (
@@ -1710,16 +2005,24 @@ function CsvImportPanel({
               </div>
             ))}
           </div>
-          {importState.invalidRows.length > 0 && (
+          {importState.issues.length > 0 && (
             <div className="invalid-list">
-              {importState.invalidRows.slice(0, 3).map((row) => (
-                <span key={row}>{row}</span>
+              {importState.issues.slice(0, 8).map((issue) => (
+                <span className={issue.level} key={`${issue.row}-${issue.field}-${issue.message}`}>
+                  第 {issue.row} 行 {issue.field}：{issue.message}
+                </span>
               ))}
             </div>
           )}
+          {(importState.unknownOwners.length > 0 || importState.unknownReviewers.length > 0) && (
+            <div className="unknown-people">
+              <span>发现新人员：{[...importState.unknownOwners, ...importState.unknownReviewers].join("、")}</span>
+              <button className="ghost compact" onClick={onAddPeople}>加入名单</button>
+            </div>
+          )}
           <div className="batch-actions import-actions">
-            <button onClick={onAppend}>确认导入（追加）</button>
-            <button onClick={onReplace}>替换当前隐患</button>
+            <button disabled={blockingCount > 0} onClick={onAppend}>确认导入（追加）</button>
+            <button disabled={blockingCount > 0} onClick={onReplace}>替换当前隐患</button>
             <button onClick={onCancel}>取消</button>
           </div>
         </div>
@@ -1757,6 +2060,7 @@ function ConfigPanel({ health, onRefresh, onRunReminder }: { health: HealthState
       <div className="config-grid">
         <ConfigItem icon={Settings} label="API 服务" value={apiOk ? `${health?.host}:${health?.port}` : "未连接"} ok={apiOk} />
         <ConfigItem icon={Link2} label="HTTPS" value={health?.httpsEnabled ? "已启用" : "未启用"} ok={Boolean(health?.httpsEnabled)} />
+        <ConfigItem icon={Settings} label="项目配置" value={health?.projectConfigFile || "待检查"} ok={Boolean(health?.projectConfigFile)} />
         <ConfigItem icon={Upload} label="上传限制" value={health ? `${health.maxUploadMb}MB · ${health.uploadDir}` : "待检查"} ok={Boolean(health?.uploadDir)} />
         <ConfigItem icon={MessageSquareText} label="机器人" value={robotOk ? `已配置${health?.dingtalkSignConfigured ? " · 钉钉加签" : ""}` : "dry-run"} ok={robotOk} />
         <ConfigItem

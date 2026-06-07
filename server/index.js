@@ -43,6 +43,7 @@ const publicBaseUrl = (process.env.PUBLIC_BASE_URL || `http://${host}:${port}`).
 const dataFile = resolveWorkspacePath(process.env.DATA_FILE, "data/hazards.json");
 const dataDir = path.dirname(dataFile);
 const notificationFile = resolveWorkspacePath(process.env.NOTIFICATION_FILE, "data/notifications.json");
+const projectConfigFile = resolveWorkspacePath(process.env.PROJECT_CONFIG_FILE, "data/project-config.json");
 const uploadDir = resolveWorkspacePath(process.env.UPLOAD_DIR, "server/uploads");
 const maxUploadMb = Number(process.env.MAX_UPLOAD_MB || 15);
 const httpsCertFile = process.env.HTTPS_CERT_FILE ? resolveWorkspacePath(process.env.HTTPS_CERT_FILE, "") : "";
@@ -98,6 +99,15 @@ const initialHazards = [
     logs: ["商户通过链接提交整改", "机器人通知维保项目-李工复核"]
   }
 ];
+
+const defaultProjectConfig = {
+  customerName: "青浦智造产业园",
+  projectName: "青浦智造产业园消防维保试点",
+  maintainerName: "维保项目-李工",
+  defaultDue: "2026-06-15",
+  owners: ["待分派", "物业工程-陈工", "物业客服-沈主管", "外包维修-赵师傅", "租户负责人-王店长", "仓储主管-刘主管", "维保项目-李工"],
+  reviewers: ["安全负责人-周经理", "维保项目-李工", "园区安全-林主管", "物业经理-黄经理"]
+};
 
 function createPilotHazards() {
   const templates = [
@@ -194,6 +204,60 @@ async function writeHazards(hazards) {
   const tmpFile = `${dataFile}.tmp`;
   await fs.writeFile(tmpFile, JSON.stringify(hazards, null, 2), "utf8");
   await fs.rename(tmpFile, dataFile);
+}
+
+function normalizeNameList(values, includePending = false) {
+  const source = Array.isArray(values) ? values : String(values || "").split(/[\n,，;；]+/);
+  const cleaned = source.map((value) => String(value || "").trim()).filter(Boolean);
+  const list = includePending ? ["待分派", ...cleaned] : cleaned;
+  return Array.from(new Set(list));
+}
+
+function normalizeProjectConfig(config = {}) {
+  return {
+    customerName: String(config.customerName || defaultProjectConfig.customerName).trim(),
+    projectName: String(config.projectName || defaultProjectConfig.projectName).trim(),
+    maintainerName: String(config.maintainerName || defaultProjectConfig.maintainerName).trim(),
+    defaultDue: String(config.defaultDue || defaultProjectConfig.defaultDue).trim(),
+    owners: normalizeNameList(config.owners || defaultProjectConfig.owners, true),
+    reviewers: normalizeNameList(config.reviewers || defaultProjectConfig.reviewers)
+  };
+}
+
+function isValidProjectConfig(config) {
+  const normalized = normalizeProjectConfig(config);
+  return (
+    normalized.customerName.length > 0 &&
+    normalized.projectName.length > 0 &&
+    normalized.maintainerName.length > 0 &&
+    /^\d{4}-\d{2}-\d{2}$/.test(normalized.defaultDue) &&
+    normalized.owners.length > 1 &&
+    normalized.reviewers.length > 0
+  );
+}
+
+async function ensureProjectConfigFile() {
+  await fs.mkdir(path.dirname(projectConfigFile), { recursive: true });
+  try {
+    await fs.access(projectConfigFile);
+  } catch {
+    await writeProjectConfig(defaultProjectConfig);
+  }
+}
+
+async function readProjectConfig() {
+  await ensureProjectConfigFile();
+  const raw = await fs.readFile(projectConfigFile, "utf8");
+  return normalizeProjectConfig(JSON.parse(raw));
+}
+
+async function writeProjectConfig(config) {
+  const normalized = normalizeProjectConfig(config);
+  await fs.mkdir(path.dirname(projectConfigFile), { recursive: true });
+  const tmpFile = `${projectConfigFile}.tmp`;
+  await fs.writeFile(tmpFile, JSON.stringify(normalized, null, 2), "utf8");
+  await fs.rename(tmpFile, projectConfigFile);
+  return normalized;
 }
 
 async function readNotifications() {
@@ -603,6 +667,7 @@ app.get("/api/health", async (_req, res) => {
     publicBaseUrl,
     dataFile,
     notificationFile,
+    projectConfigFile,
     uploadDir,
     maxUploadMb,
     allowedOrigins,
@@ -620,6 +685,39 @@ app.get("/api/health", async (_req, res) => {
 
 app.get("/api/notifications", async (_req, res) => {
   res.json(await readNotifications());
+});
+
+app.get("/api/project-config", async (_req, res) => {
+  res.json(await readProjectConfig());
+});
+
+app.put("/api/project-config", async (req, res) => {
+  if (!isValidProjectConfig(req.body)) {
+    res.status(400).json({ ok: false, error: "invalid project config" });
+    return;
+  }
+  const config = await writeProjectConfig(req.body);
+  res.json({ ok: true, config });
+});
+
+app.get("/api/project-config/export", async (_req, res) => {
+  const config = await readProjectConfig();
+  res.json({
+    kind: "strong-workflow.project-config",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    config
+  });
+});
+
+app.post("/api/project-config/import", async (req, res) => {
+  const config = req.body?.config || req.body;
+  if (!isValidProjectConfig(config)) {
+    res.status(400).json({ ok: false, error: "invalid project config package" });
+    return;
+  }
+  const saved = await writeProjectConfig(config);
+  res.json({ ok: true, config: saved });
 });
 
 app.get("/api/hazards", async (_req, res) => {

@@ -29,10 +29,12 @@ $Root = Resolve-Root $Root
 $ArchivePath = (Resolve-Path $ArchivePath).Path
 $dataFile = Join-Path $Root "data\hazards.json"
 $notificationFile = Join-Path $Root "data\notifications.json"
+$projectConfigFile = Join-Path $Root "data\project-config.json"
 $uploadDir = Join-Path $Root "server\uploads"
 
 Assert-InProjectPath -RootPath $Root -TargetPath $dataFile
 Assert-InProjectPath -RootPath $Root -TargetPath $notificationFile
+Assert-InProjectPath -RootPath $Root -TargetPath $projectConfigFile
 Assert-InProjectPath -RootPath $Root -TargetPath $uploadDir
 
 if (-not $SkipPreBackup) {
@@ -46,6 +48,7 @@ try {
   Expand-Archive -Path $ArchivePath -DestinationPath $tempDir -Force
   $restoreDataFile = Join-Path $tempDir "data\hazards.json"
   $restoreNotificationFile = Join-Path $tempDir "data\notifications.json"
+  $restoreProjectConfigFile = Join-Path $tempDir "data\project-config.json"
   $restoreUploadDir = Join-Path $tempDir "server\uploads"
 
   if (-not (Test-Path $restoreDataFile)) {
@@ -57,6 +60,10 @@ try {
 
   if (Test-Path $restoreNotificationFile) {
     Copy-Item -LiteralPath $restoreNotificationFile -Destination $notificationFile -Force
+  }
+
+  if (Test-Path $restoreProjectConfigFile) {
+    Copy-Item -LiteralPath $restoreProjectConfigFile -Destination $projectConfigFile -Force
   }
 
   if (Test-Path $restoreUploadDir) {

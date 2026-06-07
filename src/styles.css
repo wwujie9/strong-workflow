@@ -269,6 +269,46 @@ h1 {
   background: #fff8e3;
 }
 
+.invalid-list span.error {
+  color: #963126;
+  background: #fff2f0;
+}
+
+.invalid-list span.warning {
+  color: #795300;
+  background: #fff8e3;
+}
+
+.mapping-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dce6ea;
+  border-radius: 8px;
+  background: #f8fbfc;
+}
+
+.compact-field select {
+  min-height: 34px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.unknown-people {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #bfe3dc;
+  border-radius: 8px;
+  color: #176256;
+  background: #edf9f5;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .import-actions {
   justify-content: flex-start;
 }
@@ -548,6 +588,11 @@ h1 {
   background: #ffffff;
   font-size: 12px;
   font-weight: 800;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .batch-check {
@@ -1007,6 +1052,7 @@ textarea:focus-visible {
   .hero-band,
   .metrics,
   .config-grid,
+  .mapping-grid,
   .setup-grid,
   .flow-layout,
   .split,

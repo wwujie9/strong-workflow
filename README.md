@@ -27,6 +27,8 @@ samples/customer-hazards-template.csv：真实客户 CSV 模板样例，含 30 �
 | `HTTPS_KEY_FILE` | 空 | HTTPS 私钥文件路径 |
 | `VITE_API_BASE` | `http://127.0.0.1:5174/api` | 开发前端访问 API 的地址 |
 | `DATA_FILE` | `data/hazards.json` | 隐患数据落盘位置 |
+| `NOTIFICATION_FILE` | `data/notifications.json` | 机器人通知日志落盘位置 |
+| `PROJECT_CONFIG_FILE` | `data/project-config.json` | 客户项目配置落盘位置，含客户名、项目名、默认期限、责任人/复核人名单 |
 | `UPLOAD_DIR` | `server/uploads` | 整改图片/文件上传目录 |
 | `MAX_UPLOAD_MB` | `15` | 单文件上传大小上限 |
 | `ALLOWED_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5174` | CORS 白名单 |
@@ -99,6 +101,24 @@ npm run server
 samples/customer-hazards-template.csv
 ```
 
+## 下一家客户复用
+
+这版已把客户项目配置从浏览器本地存储升级为后端持久化文件，并支持配置导入/导出。实施下一家客户时建议按这个顺序走：
+
+1. 在“项目初始化”里配置客户名称、项目名称、维保负责人、默认整改期限、责任人名单和复核人名单。
+2. 点击“导出配置”，保存为该客户的项目配置包。
+3. 下一家客户部署后，点击“导入配置”，直接恢复客户组织和默认规则。
+4. 客户 Excel 先另存为 CSV，上传后检查字段映射；系统会自动识别常见表头，也允许手动选择。
+5. 阻断问题必须处理后才能导入，包括缺点位、缺标题/描述、编号重复、日期格式错误。
+6. CSV 中出现的新责任人/复核人会提示，可一键加入项目名单。
+7. 运维升级时使用 `scripts\update.ps1`，脚本会先备份隐患、通知日志、项目配置和上传文件，再拉取代码、构建、重启 Docker、跑健康检查。
+
+快速更新命令：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\update.ps1
+```
+
 建议上线当天按 [PILOT_DRILL_RECORD.md](D:/1pro/strong-workflow/PILOT_DRILL_RECORD.md) 逐项记录导入、分派、整改、复核、催办和 PDF 导出结果。
 
 ## 状态机保护
@@ -124,6 +144,8 @@ samples/customer-hazards-template.csv
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\backup.ps1
 ```
+
+备份包会包含 `data/hazards.json`、`data/notifications.json`、`data/project-config.json` 和 `server/uploads`。
 
 恢复指定备份包。恢复前默认会先自动做一次当前数据备份：
 

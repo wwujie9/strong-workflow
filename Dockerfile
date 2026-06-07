@@ -16,6 +16,7 @@ ENV HOST=0.0.0.0
 ENV PORT=5174
 ENV DATA_FILE=/app/data/hazards.json
 ENV NOTIFICATION_FILE=/app/data/notifications.json
+ENV PROJECT_CONFIG_FILE=/app/data/project-config.json
 ENV UPLOAD_DIR=/app/server/uploads
 
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup

@@ -41,6 +41,8 @@ PORT=5174
 PUBLIC_BASE_URL=https://xf-flow.example.com
 VITE_API_BASE=https://xf-flow.example.com/api
 DATA_FILE=data/hazards.json
+NOTIFICATION_FILE=data/notifications.json
+PROJECT_CONFIG_FILE=data/project-config.json
 UPLOAD_DIR=server/uploads
 MAX_UPLOAD_MB=15
 ALLOWED_ORIGINS=https://xf-flow.example.com,http://127.0.0.1:5173,http://localhost:5173
@@ -113,6 +115,7 @@ Docker 运行时关键配置在 `.env.docker`：
 PUBLIC_BASE_URL=http://127.0.0.1:5174
 DATA_FILE=/app/data/hazards.json
 NOTIFICATION_FILE=/app/data/notifications.json
+PROJECT_CONFIG_FILE=/app/data/project-config.json
 UPLOAD_DIR=/app/server/uploads
 ALLOWED_ORIGINS=http://127.0.0.1:5174,http://localhost:5174
 ```
@@ -378,8 +381,7 @@ docker compose ps
 如果当前使用本地源码构建，不依赖 GHCR：
 
 ```powershell
-git pull
-docker compose up -d --build
+powershell -ExecutionPolicy Bypass -File scripts\update.ps1
 ```
 
 如果使用 GHCR 镜像部署：

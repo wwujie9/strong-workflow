@@ -65,6 +65,12 @@ powershell -ExecutionPolicy Bypass -File scripts\docker-down.ps1
 powershell -ExecutionPolicy Bypass -File scripts\docker-up.ps1 -Build
 ```
 
+拉取代码、备份、构建、重启和健康检查一体化更新：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\update.ps1
+```
+
 ## 3. 生产服务器源码部署流程
 
 适合客户服务器无法访问 GHCR，或希望从源码构建的场景：
@@ -75,6 +81,12 @@ git pull
 powershell -ExecutionPolicy Bypass -File scripts\backup.ps1
 powershell -ExecutionPolicy Bypass -File scripts\docker-up.ps1 -Build
 powershell -ExecutionPolicy Bypass -File scripts\docker-health.ps1
+```
+
+推荐直接使用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\update.ps1
 ```
 
 回滚方式：
@@ -167,6 +179,7 @@ Compose 挂载：
 ```text
 data/hazards.json
 data/notifications.json
+data/project-config.json
 server/uploads/
 ```
 
