@@ -192,6 +192,14 @@ powershell -ExecutionPolicy Bypass -File scripts\health-check.ps1
 
 健康检查会输出 JSON。若机器人未配置，会把当前模式标记为 `dry-run` 问题项，正式上线前需要处理。
 
+Docker 端到端验收：
+
+```powershell
+npm run e2e:docker
+```
+
+这条命令会在本地 Docker 服务上验证健康检查、客户模板库、30 条真实试点初始化、CSV 模板样例、单条分派 API、整改证据上传、整改提交、复核通过、复核驳回、自动催办、机器人 dry-run 通知、项目配置导入导出和模板审计保留。脚本默认在结束时恢复原始隐患和项目配置，便于反复验证交付环境。
+
 ## 机器人配置
 
 企业微信：

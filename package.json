@@ -8,6 +8,7 @@
     "server": "node server/index.js",
     "start": "node server/index.js",
     "build": "tsc && vite build",
+    "e2e:docker": "node scripts/e2e-docker.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort"
   },
   "dependencies": {

@@ -247,15 +247,15 @@ function createRealTemplateHazards() {
       title,
       description: `现场维保检查发现：${title}。该问题需责任人在整改期限内提交照片或视频证据。`,
       suggestion: "按消防维保意见完成整改，上传整改后照片；涉及防火门、报警系统的隐患需补充短视频或复测说明。",
-      status: index < 6 ? "待整改" : "待分派",
+      status: "待整改",
       severity,
-      owner: index < 6 ? owner : "待分派",
+      owner,
       reviewer: index % 3 === 0 ? "安全负责人-周经理" : "维保项目-李工",
       due: index < 10 ? "2026-06-12" : "2026-06-15",
       beforeEvidence: [`真实模板维保报告第 ${number} 项`, `点位：${location}`],
       afterEvidence: [],
       updated: "刚刚",
-      logs: ["真实试点模板初始化", index < 6 ? `已预分派给 ${owner}` : "等待物业负责人分派责任人"]
+      logs: ["真实试点模板初始化", `已预分派给 ${owner}`]
     };
   });
 }

@@ -28,7 +28,8 @@ workflow_dispatch 手动触发
 3. npm ci
 4. npm run build
 5. docker build
-6. 非 PR 时推送镜像到 GHCR
+6. 本地或测试环境执行 npm run e2e:docker
+7. 非 PR 时推送镜像到 GHCR
 ```
 
 镜像地址：
@@ -51,6 +52,7 @@ powershell -ExecutionPolicy Bypass -File scripts\docker-up.ps1 -Build
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\docker-health.ps1
 docker compose ps
+npm run e2e:docker
 ```
 
 停止：
@@ -81,6 +83,7 @@ git pull
 powershell -ExecutionPolicy Bypass -File scripts\backup.ps1
 powershell -ExecutionPolicy Bypass -File scripts\docker-up.ps1 -Build
 powershell -ExecutionPolicy Bypass -File scripts\docker-health.ps1
+npm run e2e:docker
 ```
 
 推荐直接使用：
@@ -157,6 +160,7 @@ git push origin v0.2.0
 powershell -ExecutionPolicy Bypass -File scripts\backup.ps1
 docker compose ps
 powershell -ExecutionPolicy Bypass -File scripts\docker-health.ps1
+npm run e2e:docker
 ```
 
 上线后：
@@ -199,6 +203,7 @@ GitHub Actions SSH 到服务器执行 docker compose pull/up
 按 v2/rapid-iteration 自动发布 staging
 服务健康失败时回滚
 备份成功后才允许更新容器
+把 npm run e2e:docker 作为 staging 必过门槛
 ```
 
 首个真实试点建议先保持“人工确认后执行部署脚本”，避免自动发布误覆盖客户现场数据。
