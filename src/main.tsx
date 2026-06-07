@@ -611,7 +611,7 @@ function useStoredProjectConfig() {
 }
 
 function normalizeNameList(values: string[] | string, includePending = false) {
-  const source = Array.isArray(values) ? values : values.split(/[\n,，;；]+/);
+  const source = Array.isArray(values) ? values : values.split(/[\n,，、;；]+/);
   const cleaned = source.map((value) => value.trim()).filter(Boolean);
   const list = includePending ? ["待分派", ...cleaned] : cleaned;
   return Array.from(new Set(list));
@@ -1124,10 +1124,14 @@ function App() {
       setNotice(`规则冲突风险高：${suggestion.conflict.summary}。请先缩窄关键词后再加入模板。`);
       return;
     }
+    if (!suggestion.label.trim() || suggestion.keywords.length === 0) {
+      setNotice("规则名称和关键词不能为空。");
+      return;
+    }
     const currentRules = projectConfig.assignmentRules || defaultProjectConfig.assignmentRules!;
     const nextRule: AssignmentRule = {
       id: `${suggestion.id}-${Date.now()}`,
-      label: suggestion.label.replace("规则建议", ""),
+      label: suggestion.label.replace(/规则建议$/, ""),
       keywords: suggestion.keywords,
       owner: suggestion.owner,
       reviewer: suggestion.reviewer,
@@ -2083,6 +2087,8 @@ function App() {
         onApplyTemplate={applyProjectTemplate}
         onDownloadCsvTemplate={downloadCsvTemplate}
         onExportDrillRecord={exportDrillRecord}
+        ownerOptions={ownerOptions}
+        reviewerOptions={reviewerOptions}
         templates={projectTemplates}
       />
 
@@ -2469,6 +2475,8 @@ function CustomerOnboardingPanel({
   onApplyTemplate,
   onDownloadCsvTemplate,
   onExportDrillRecord,
+  ownerOptions,
+  reviewerOptions,
   templates
 }: {
   assignmentSuggestion: AssignmentSuggestion | null;
@@ -2479,6 +2487,8 @@ function CustomerOnboardingPanel({
   onApplyTemplate: (templateId: string) => void;
   onDownloadCsvTemplate: () => void;
   onExportDrillRecord: () => void;
+  ownerOptions: string[];
+  reviewerOptions: string[];
   templates: ProjectTemplate[];
 }) {
   const activeTemplate = templates.find((template) => template.id === config.templateId) || templates[0];
@@ -2603,29 +2613,15 @@ function CustomerOnboardingPanel({
                 <div className="optimization-list">
                   {assignmentSuggestion.quality.optimizationSuggestions.length ? (
                     assignmentSuggestion.quality.optimizationSuggestions.map((item) => (
-                      <div className="optimization-item" key={item.id}>
-                        <div>
-                          <strong>{item.label}</strong>
-                          <p>{item.reason}</p>
-                          <small>{item.samples.join("；")}</small>
-                        </div>
-                        <div className={`conflict-box ${item.conflict.level === "高" ? "high" : item.conflict.level === "中" ? "medium" : "low"}`}>
-                          <strong>冲突风险：{item.conflict.level}</strong>
-                          <p>{item.conflict.summary}</p>
-                          {[...item.conflict.keywordOverlaps, ...item.conflict.affectedItems].slice(0, 3).map((message) => (
-                            <small key={`${item.id}-${message}`}>{message}</small>
-                          ))}
-                        </div>
-                        <div className="optimization-tags">
-                          {item.keywords.map((keyword) => (
-                            <span key={`${item.id}-${keyword}`}>{keyword}</span>
-                          ))}
-                        </div>
-                        <button className="ghost compact" disabled={item.conflict.level === "高"} onClick={() => onApplyOptimizationSuggestion(item)}>
-                          <Plus size={15} />
-                          加入规则
-                        </button>
-                      </div>
+                      <OptimizationSuggestionEditor
+                        allItems={assignmentSuggestion.items}
+                        config={config}
+                        key={item.id}
+                        onApply={onApplyOptimizationSuggestion}
+                        ownerOptions={ownerOptions}
+                        reviewerOptions={reviewerOptions}
+                        suggestion={item}
+                      />
                     ))
                   ) : (
                     <small className="optimization-empty">本次未命中样本不足，暂不生成新增规则建议。</small>
@@ -2658,6 +2654,111 @@ function CustomerOnboardingPanel({
         </div>
       </div>
     </section>
+  );
+}
+
+function OptimizationSuggestionEditor({
+  allItems,
+  config,
+  onApply,
+  ownerOptions,
+  reviewerOptions,
+  suggestion
+}: {
+  allItems: AssignmentSuggestionItem[];
+  config: ProjectConfig;
+  onApply: (suggestion: RuleOptimizationSuggestion) => void;
+  ownerOptions: string[];
+  reviewerOptions: string[];
+  suggestion: RuleOptimizationSuggestion;
+}) {
+  const [label, setLabel] = useState(suggestion.label.replace(/规则建议$/, ""));
+  const [keywordsText, setKeywordsText] = useState(suggestion.keywords.join("、"));
+  const [owner, setOwner] = useState(suggestion.owner);
+  const [reviewer, setReviewer] = useState(suggestion.reviewer);
+  const [dueDays, setDueDays] = useState(String(suggestion.dueDays));
+
+  useEffect(() => {
+    setLabel(suggestion.label.replace(/规则建议$/, ""));
+    setKeywordsText(suggestion.keywords.join("、"));
+    setOwner(suggestion.owner);
+    setReviewer(suggestion.reviewer);
+    setDueDays(String(suggestion.dueDays));
+  }, [suggestion]);
+
+  const editedSuggestion = useMemo(() => {
+    const keywords = normalizeNameList(keywordsText).slice(0, 8);
+    const base = {
+      ...suggestion,
+      label: label.trim() || suggestion.label.replace(/规则建议$/, ""),
+      keywords,
+      owner,
+      reviewer,
+      dueDays: normalizeDueDays(dueDays, suggestion.dueDays)
+    };
+    return { ...base, conflict: buildRuleConflictCheck(base, config, allItems) };
+  }, [allItems, config, dueDays, keywordsText, label, owner, reviewer, suggestion]);
+
+  const canApply = Boolean(editedSuggestion.label.trim() && editedSuggestion.keywords.length > 0 && editedSuggestion.conflict.level !== "高");
+
+  return (
+    <div className="optimization-item">
+      <div>
+        <strong>{suggestion.label}</strong>
+        <p>{suggestion.reason}</p>
+        <small>{suggestion.samples.join("；")}</small>
+      </div>
+      <div className="optimization-editor">
+        <label>
+          <span>规则名</span>
+          <input value={label} onChange={(event) => setLabel(event.target.value)} />
+        </label>
+        <label>
+          <span>关键词</span>
+          <input value={keywordsText} onChange={(event) => setKeywordsText(event.target.value)} />
+        </label>
+        <label>
+          <span>责任人</span>
+          <select value={owner} onChange={(event) => setOwner(event.target.value)}>
+            {ownerOptions.filter((item) => item !== "待分派").map((item) => (
+              <option key={item}>{item}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>复核人</span>
+          <select value={reviewer} onChange={(event) => setReviewer(event.target.value)}>
+            {reviewerOptions.map((item) => (
+              <option key={item}>{item}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>期限天数</span>
+          <input min="1" max="365" type="number" value={dueDays} onChange={(event) => setDueDays(event.target.value)} />
+        </label>
+      </div>
+      <div className={`conflict-box ${editedSuggestion.conflict.level === "高" ? "high" : editedSuggestion.conflict.level === "中" ? "medium" : "low"}`}>
+        <strong>冲突风险：{editedSuggestion.conflict.level}</strong>
+        <p>{editedSuggestion.conflict.summary}</p>
+        {[...editedSuggestion.conflict.keywordOverlaps, ...editedSuggestion.conflict.affectedItems].slice(0, 3).map((message) => (
+          <small key={`${suggestion.id}-${message}`}>{message}</small>
+        ))}
+      </div>
+      <div className="optimization-tags">
+        {editedSuggestion.keywords.length ? (
+          editedSuggestion.keywords.map((keyword) => (
+            <span key={`${suggestion.id}-${keyword}`}>{keyword}</span>
+          ))
+        ) : (
+          <span>待填写关键词</span>
+        )}
+      </div>
+      <button className="ghost compact" disabled={!canApply} onClick={() => onApply(editedSuggestion)}>
+        <Plus size={15} />
+        加入规则
+      </button>
+    </div>
   );
 }
 

@@ -396,6 +396,39 @@ h1 {
   line-height: 1.45;
 }
 
+.optimization-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.optimization-editor label {
+  display: grid;
+  gap: 5px;
+}
+
+.optimization-editor label:nth-child(2) {
+  grid-column: 1 / -1;
+}
+
+.optimization-editor span {
+  color: #667982;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.optimization-editor input,
+.optimization-editor select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid #d7e2e6;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #17202a;
+  padding: 7px 9px;
+  outline: 0;
+}
+
 .optimization-tags {
   display: flex;
   flex-wrap: wrap;
