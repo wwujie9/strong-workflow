@@ -4,6 +4,15 @@
 
 上线前请先逐项核对 [LAUNCH_CHECKLIST.md](D:/1pro/strong-workflow/LAUNCH_CHECKLIST.md)，并用 [RISK_REGISTER.md](D:/1pro/strong-workflow/RISK_REGISTER.md) 做上线评审。这两份文件覆盖公网 HTTPS、机器人、真实数据、人员名单、手机端测试、备份、自动催办、PDF 闭环包、当前已知不足和阻塞上线风险。
 
+上线运行包：
+
+```text
+DEPLOYMENT.md：Windows 服务 / PM2 / Nginx / Cloudflare Tunnel / Node HTTPS 部署说明
+ROBOT_INTEGRATION_RECORD.md：真实企业微信/钉钉机器人联调记录
+PILOT_DRILL_RECORD.md：30 条隐患端到端试点演练记录
+samples/customer-hazards-template.csv：真实客户 CSV 模板样例，含 30 条隐患
+```
+
 ## 端口与配置
 
 本地固定配置在 `.env.local`，可参考 `.env.example`。
@@ -61,6 +70,8 @@ npm run server
 
 开发前端端口固定为 `5173`，后端/API 端口固定为 `5174`。
 
+生产运行可参考 [DEPLOYMENT.md](D:/1pro/strong-workflow/DEPLOYMENT.md)，其中包含 PM2、Windows 服务、Nginx、Cloudflare Tunnel 和 Node 直接 HTTPS 三种公网路径。
+
 ## 试点流程
 
 1. 打开页面，先查看“配置与上线检查”，确认端口、公开链接、上传目录和机器人状态。
@@ -80,6 +91,14 @@ npm run server
 生成30条试点：通用模拟数据
 真实模板：青浦智造产业园消防维保试点，30 条真实化点位数据
 ```
+
+真实试点导入可使用：
+
+```text
+samples/customer-hazards-template.csv
+```
+
+建议上线当天按 [PILOT_DRILL_RECORD.md](D:/1pro/strong-workflow/PILOT_DRILL_RECORD.md) 逐项记录导入、分派、整改、复核、催办和 PDF 导出结果。
 
 ## 状态机保护
 
@@ -139,6 +158,8 @@ npm run server
 未配置机器人时，通知接口会返回 `dryRun: true`，不会真实发送外部消息。
 
 每次通知都会写入 `data/notifications.json`。配置面板会展示最近通知状态和最近失败记录；上线前如果仍是 `dry-run`，说明还没有接真实机器人。
+
+真实联调请使用 [ROBOT_INTEGRATION_RECORD.md](D:/1pro/strong-workflow/ROBOT_INTEGRATION_RECORD.md) 记录。至少要验证 `/api/notify`、生成整改链接、提交整改证据、复核通过、驳回和催办 6 个场景。
 
 ## HTTPS 与自动催办
 

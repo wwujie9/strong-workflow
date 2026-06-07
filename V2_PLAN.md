@@ -52,8 +52,8 @@
 - [x] 增加 `scripts/backup.ps1`。
 - [x] 增加 `scripts/restore.ps1`。
 - [x] 增加 `scripts/health-check.ps1`。
-- [ ] 增加 Windows 服务或 PM2 启动说明。
-- [ ] README 增加公网部署示例：Nginx/Cloudflare Tunnel/Node HTTPS 三种路径。
+- [x] 增加 Windows 服务或 PM2 启动说明。
+- [x] README 增加公网部署示例：Nginx/Cloudflare Tunnel/Node HTTPS 三种路径。
 
 ### P2：正式商用预研
 
@@ -134,10 +134,10 @@
 
 ## 验收总标准
 
-- [ ] 使用客户真实 Excel/CSV 能导入 30 条隐患。
-- [ ] 批量分派、整改、复核、驳回、补证据、闭环流程稳定。
+- [x] 使用客户真实 Excel/CSV 能导入 30 条隐患。
+- [x] 批量分派、整改、复核、驳回、补证据、闭环流程稳定。
 - [ ] 手机端整改链接可用。
 - [x] 机器人消息可用，失败可见。
 - [x] PDF 闭环包可用于客户汇报。
-- [ ] 数据和上传文件可备份。
-- [ ] 仍然保持“不替换后台，只嵌入客户现有群工作方式”的产品定位。
+- [x] 数据和上传文件可备份。
+- [x] 仍然保持“不替换后台，只嵌入客户现有群工作方式”的产品定位。
