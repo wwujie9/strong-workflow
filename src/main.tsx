@@ -176,6 +176,7 @@ type AssignmentSuggestionItem = {
   id: string;
   code: string;
   title: string;
+  description: string;
   location: string;
   category: string;
   owner: string;
@@ -192,6 +193,7 @@ type RuleQualityReport = {
   topRules: RuleHitStat[];
   unmatchedItems: AssignmentSuggestionItem[];
   silentRules: AssignmentRule[];
+  optimizationSuggestions: RuleOptimizationSuggestion[];
 };
 
 type RuleHitStat = {
@@ -199,6 +201,18 @@ type RuleHitStat = {
   label: string;
   owner: string;
   count: number;
+};
+
+type RuleOptimizationSuggestion = {
+  id: string;
+  label: string;
+  keywords: string[];
+  owner: string;
+  reviewer: string;
+  dueDays: number;
+  hitCount: number;
+  reason: string;
+  samples: string[];
 };
 
 type DrillRecord = {
@@ -217,6 +231,7 @@ type DrillRecord = {
   topRuleSummary: string;
   unmatchedSamples: string[];
   silentRuleSamples: string[];
+  optimizationSuggestions: string[];
   suggestedOwner: string;
   suggestedReviewer: string;
   suggestedDue: string;
@@ -655,6 +670,89 @@ function matchAssignmentRule(hazard: Pick<Hazard, "category" | "title" | "descri
   return rules.find((rule) => rule.keywords.some((keyword) => text.includes(keyword.toLowerCase())));
 }
 
+function extractRuleKeywords(item: AssignmentSuggestionItem) {
+  const text = `${item.category} ${item.title} ${item.description} ${item.location}`;
+  const knownTerms = [
+    "防火卷帘",
+    "应急照明",
+    "疏散指示",
+    "安全出口",
+    "消火栓",
+    "消防栓",
+    "消防栓箱门",
+    "手动报警",
+    "报警按钮",
+    "报警系统",
+    "排烟风机",
+    "排烟口",
+    "防火封堵",
+    "电缆井",
+    "强电井",
+    "弱电井",
+    "配电箱",
+    "配电间",
+    "防火门",
+    "闭门器",
+    "灭火器",
+    "喷淋",
+    "卷帘",
+    "照明",
+    "指示",
+    "标识",
+    "报警",
+    "排烟",
+    "配电",
+    "封堵"
+  ];
+  const stopWords = new Set(["待分类", "隐患整改", "整改", "建议", "现场", "发现", "上传", "照片", "视频", "问题", "客户", "项目", "楼层", "区域"]);
+  const matchedKnown = knownTerms.filter((term) => text.includes(term));
+  const category = item.category && !stopWords.has(item.category) ? [item.category] : [];
+  const words = text
+    .split(/[，。、；;:：\s/\\()[\]（）【】,.-]+/)
+    .map((word) => word.trim())
+    .filter((word) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,10}$/.test(word) && !stopWords.has(word) && !/^\d+$/.test(word) && !/^\d+[Ff层楼]?$/.test(word));
+  return Array.from(new Set([...matchedKnown, ...category, ...words])).slice(0, 6);
+}
+
+function buildRuleOptimizationSuggestions(items: AssignmentSuggestionItem[], config: ProjectConfig): RuleOptimizationSuggestion[] {
+  const fallbackOwner = config.assignmentRules?.fallbackOwner || config.owners.find((owner) => owner !== "待分派") || config.maintainerName;
+  const fallbackReviewer = config.assignmentRules?.fallbackReviewer || config.reviewers[0] || config.maintainerName;
+  const fallbackDueDays = config.assignmentRules?.dueDays || 7;
+  const groups = items.reduce<Record<string, { keywordCounts: Record<string, number>; samples: AssignmentSuggestionItem[] }>>((acc, item) => {
+    const keywords = extractRuleKeywords(item);
+    const primary = keywords[0] || "未分类隐患";
+    const current = acc[primary] || { keywordCounts: {}, samples: [] };
+    keywords.forEach((keyword) => {
+      current.keywordCounts[keyword] = (current.keywordCounts[keyword] || 0) + 1;
+    });
+    current.samples.push(item);
+    return { ...acc, [primary]: current };
+  }, {});
+
+  return Object.entries(groups)
+    .map(([primary, group]) => {
+      const rankedKeywords = Object.entries(group.keywordCounts)
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh-CN"))
+        .map(([keyword]) => keyword)
+        .filter((keyword) => keyword !== primary);
+      const keywords = [primary, ...rankedKeywords].slice(0, 5);
+      return {
+        id: `suggest-${primary.replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, "").slice(0, 12) || "rule"}`,
+        label: `${primary}规则建议`,
+        keywords,
+        owner: fallbackOwner,
+        reviewer: fallbackReviewer,
+        dueDays: fallbackDueDays,
+        hitCount: group.samples.length,
+        reason: `${group.samples.length} 条未命中隐患包含“${keywords.slice(0, 3).join("、")}”，建议新增独立规则`,
+        samples: group.samples.slice(0, 3).map((item) => `${item.code} ${item.title}`)
+      };
+    })
+    .filter((suggestion) => suggestion.keywords.length > 0)
+    .sort((a, b) => b.hitCount - a.hitCount || a.label.localeCompare(b.label, "zh-CN"))
+    .slice(0, 4);
+}
+
 function buildRuleQualityReport(items: AssignmentSuggestionItem[], config: ProjectConfig): RuleQualityReport {
   const configuredRules = config.assignmentRules?.keywordRules || [];
   const hitRules = new Set(items.map((item) => item.ruleId).filter((ruleId) => ruleId !== "default"));
@@ -666,13 +764,15 @@ function buildRuleQualityReport(items: AssignmentSuggestionItem[], config: Proje
   const topRules = Object.values(counts).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "zh-CN"));
   const unmatchedItems = items.filter((item) => item.ruleId === "default");
   const silentRules = configuredRules.filter((rule) => !hitRules.has(rule.id));
+  const optimizationSuggestions = buildRuleOptimizationSuggestions(unmatchedItems, config);
   return {
     total: items.length,
     matched: items.length - unmatchedItems.length,
     unmatched: unmatchedItems.length,
     topRules,
     unmatchedItems,
-    silentRules
+    silentRules,
+    optimizationSuggestions
   };
 }
 
@@ -958,6 +1058,7 @@ function App() {
         id: hazard.id,
         code: hazard.code,
         title: hazard.title,
+        description: hazard.description,
         location: hazard.location,
         category: hazard.category,
         owner: hazard.owner === "待分派" ? rule?.owner || fallbackOwner : hazard.owner,
@@ -981,6 +1082,27 @@ function App() {
       items,
       quality
     };
+  }
+
+  function applyRuleOptimizationSuggestion(suggestion: RuleOptimizationSuggestion) {
+    const currentRules = projectConfig.assignmentRules || defaultProjectConfig.assignmentRules!;
+    const nextRule: AssignmentRule = {
+      id: `${suggestion.id}-${Date.now()}`,
+      label: suggestion.label.replace("规则建议", ""),
+      keywords: suggestion.keywords,
+      owner: suggestion.owner,
+      reviewer: suggestion.reviewer,
+      dueDays: suggestion.dueDays
+    };
+    const nextConfig = normalizeProjectConfig({
+      ...projectConfig,
+      assignmentRules: {
+        ...currentRules,
+        keywordRules: [...(currentRules.keywordRules || []), nextRule]
+      }
+    });
+    setProjectConfig(nextConfig);
+    setNotice(`已加入模板规则：${nextRule.label}，关键词 ${nextRule.keywords.join("、")}。后续导入会自动命中。`);
   }
 
   async function applyAssignmentSuggestion() {
@@ -1121,6 +1243,7 @@ function App() {
       topRuleSummary: suggestion.quality.topRules.slice(0, 3).map((rule) => `${rule.label} ${rule.count} 条`).join("；") || "暂无规则命中",
       unmatchedSamples: suggestion.quality.unmatchedItems.slice(0, 5).map((item) => `${item.code} ${item.title}`),
       silentRuleSamples: suggestion.quality.silentRules.slice(0, 5).map((rule) => rule.label),
+      optimizationSuggestions: suggestion.quality.optimizationSuggestions.slice(0, 5).map((item) => `${item.label}：${item.keywords.join("、")}`),
       suggestedOwner: suggestion.owner,
       suggestedReviewer: suggestion.reviewer,
       suggestedDue: suggestion.due
@@ -1231,6 +1354,7 @@ function App() {
       "",
       `- 未命中样例：${drillRecord.unmatchedSamples.length ? drillRecord.unmatchedSamples.join("；") : "暂无"}`,
       `- 沉默规则样例：${drillRecord.silentRuleSamples.length ? drillRecord.silentRuleSamples.join("；") : "暂无"}`,
+      `- 建议新增规则：${drillRecord.optimizationSuggestions.length ? drillRecord.optimizationSuggestions.join("；") : "暂无"}`,
       "",
       "## 现场复核项",
       "",
@@ -1916,6 +2040,7 @@ function App() {
         config={projectConfig}
         drillRecord={drillRecord}
         onApplySuggestion={applyAssignmentSuggestion}
+        onApplyOptimizationSuggestion={applyRuleOptimizationSuggestion}
         onApplyTemplate={applyProjectTemplate}
         onDownloadCsvTemplate={downloadCsvTemplate}
         onExportDrillRecord={exportDrillRecord}
@@ -2300,6 +2425,7 @@ function CustomerOnboardingPanel({
   assignmentSuggestion,
   config,
   drillRecord,
+  onApplyOptimizationSuggestion,
   onApplySuggestion,
   onApplyTemplate,
   onDownloadCsvTemplate,
@@ -2309,6 +2435,7 @@ function CustomerOnboardingPanel({
   assignmentSuggestion: AssignmentSuggestion | null;
   config: ProjectConfig;
   drillRecord: DrillRecord | null;
+  onApplyOptimizationSuggestion: (suggestion: RuleOptimizationSuggestion) => void;
   onApplySuggestion: () => void;
   onApplyTemplate: (templateId: string) => void;
   onDownloadCsvTemplate: () => void;
@@ -2419,7 +2546,7 @@ function CustomerOnboardingPanel({
               <div className="quality-section">
                 <span>未命中隐患</span>
                 <div className="quality-list miss">
-                  {(assignmentSuggestion.quality.unmatchedItems.length ? assignmentSuggestion.quality.unmatchedItems.slice(0, 4) : [{ id: "empty", code: "暂无", title: "本次导入全部命中规则", location: "", category: "", owner: "", reviewer: "", due: "", ruleId: "default", ruleLabel: "默认规则" }]).map((item) => (
+                  {(assignmentSuggestion.quality.unmatchedItems.length ? assignmentSuggestion.quality.unmatchedItems.slice(0, 4) : [{ id: "empty", code: "暂无", title: "本次导入全部命中规则", description: "", location: "", category: "", owner: "", reviewer: "", due: "", ruleId: "default", ruleLabel: "默认规则" }]).map((item) => (
                     <small key={item.id}>{item.code} · {item.title}</small>
                   ))}
                 </div>
@@ -2430,6 +2557,33 @@ function CustomerOnboardingPanel({
                   {(assignmentSuggestion.quality.silentRules.length ? assignmentSuggestion.quality.silentRules.slice(0, 4) : [{ id: "empty", label: "暂无沉默规则", keywords: [], owner: "规则可保留" }]).map((rule) => (
                     <small key={rule.id}>{rule.label} · {rule.owner}</small>
                   ))}
+                </div>
+              </div>
+              <div className="quality-section">
+                <span>优化建议</span>
+                <div className="optimization-list">
+                  {assignmentSuggestion.quality.optimizationSuggestions.length ? (
+                    assignmentSuggestion.quality.optimizationSuggestions.map((item) => (
+                      <div className="optimization-item" key={item.id}>
+                        <div>
+                          <strong>{item.label}</strong>
+                          <p>{item.reason}</p>
+                          <small>{item.samples.join("；")}</small>
+                        </div>
+                        <div className="optimization-tags">
+                          {item.keywords.map((keyword) => (
+                            <span key={`${item.id}-${keyword}`}>{keyword}</span>
+                          ))}
+                        </div>
+                        <button className="ghost compact" onClick={() => onApplyOptimizationSuggestion(item)}>
+                          <Plus size={15} />
+                          加入规则
+                        </button>
+                      </div>
+                    ))
+                  ) : (
+                    <small className="optimization-empty">本次未命中样本不足，暂不生成新增规则建议。</small>
+                  )}
                 </div>
               </div>
             </>
