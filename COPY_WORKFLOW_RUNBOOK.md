@@ -56,6 +56,20 @@ Docker API 健康检查
 复核人复核链接：https://你的域名/#review/<隐患ID>
 ```
 
+已提供可直接复制的入口组件：
+
+```text
+integrations/existing-site-entry.html
+```
+
+使用方法：
+
+1. 打开 [existing-site-entry.html](D:/1pro/strong-workflow/integrations/existing-site-entry.html)。
+2. 将 `data-workflow-origin` 改成 strong-workflow 的公网 HTTPS 地址。
+3. 将 `data-demo-hazard-id` 改成客户现场当前隐患 ID，或保留 `real-001` 作为演示入口。
+4. 将整段 HTML 放到客户现有官网、内部门户、CMS 页面或公众号菜单落地页。
+5. 执行 `npm run check:integration`，确认入口组件包含工作台、整改、复核和复制入口。
+
 上线前必须确认：
 
 ```text

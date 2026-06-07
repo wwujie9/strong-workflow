@@ -200,6 +200,14 @@ npm run e2e:docker
 
 这条命令会在本地 Docker 服务上验证健康检查、客户模板库、30 条真实试点初始化、CSV 模板样例、单条分派 API、整改证据上传、整改提交、复核通过、复核驳回、自动催办、机器人 dry-run 通知、项目配置导入导出和模板审计保留。脚本默认在结束时恢复原始隐患和项目配置，便于反复验证交付环境。
 
+现有流量站点入口组件验收：
+
+```powershell
+npm run check:integration
+```
+
+入口组件位于 [integrations/existing-site-entry.html](D:/1pro/strong-workflow/integrations/existing-site-entry.html)，可复制到客户现有官网、内部门户、CMS 页面或公众号菜单落地页，把 `data-workflow-origin` 改成公网 HTTPS 地址即可。
+
 ## 机器人配置
 
 企业微信：

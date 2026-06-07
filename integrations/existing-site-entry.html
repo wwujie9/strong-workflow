@@ -1,0 +1,204 @@
+<!--
+  现有流量站点入口组件
+  使用方式：
+  1. 把 data-workflow-origin 改成 strong-workflow 的公网 HTTPS 地址。
+  2. 可选：把 data-demo-hazard-id 改成客户现场当前隐患 ID。
+  3. 将整段复制到客户官网、内部门户、CMS 页面或公众号菜单落地页。
+-->
+<section
+  class="sw-entry"
+  data-workflow-origin="https://xf-flow.example.com"
+  data-demo-hazard-id="real-001"
+>
+  <style>
+    .sw-entry {
+      --sw-ink: #17202a;
+      --sw-muted: #5f7179;
+      --sw-line: #d9e4e8;
+      --sw-brand: #14746f;
+      --sw-soft: #eef8f6;
+      font-family: "Microsoft YaHei", Arial, sans-serif;
+      box-sizing: border-box;
+      width: min(980px, 100%);
+      margin: 20px auto;
+      padding: 18px;
+      border: 1px solid var(--sw-line);
+      border-radius: 8px;
+      background: #ffffff;
+      color: var(--sw-ink);
+    }
+
+    .sw-entry *,
+    .sw-entry *::before,
+    .sw-entry *::after {
+      box-sizing: border-box;
+    }
+
+    .sw-entry__head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--sw-line);
+    }
+
+    .sw-entry__head h2 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.25;
+    }
+
+    .sw-entry__head p,
+    .sw-entry__step p,
+    .sw-entry__status {
+      margin: 6px 0 0;
+      color: var(--sw-muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .sw-entry__badge {
+      flex: 0 0 auto;
+      padding: 6px 9px;
+      border-radius: 999px;
+      color: var(--sw-brand);
+      background: var(--sw-soft);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .sw-entry__grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin: 14px 0;
+    }
+
+    .sw-entry__step {
+      min-height: 110px;
+      padding: 12px;
+      border: 1px solid var(--sw-line);
+      border-radius: 8px;
+      background: #fbfdfd;
+    }
+
+    .sw-entry__step strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    .sw-entry__actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .sw-entry__actions a,
+    .sw-entry__actions button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 38px;
+      padding: 0 13px;
+      border: 1px solid var(--sw-brand);
+      border-radius: 7px;
+      color: #ffffff;
+      background: var(--sw-brand);
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .sw-entry__actions a[data-variant="ghost"],
+    .sw-entry__actions button[data-variant="ghost"] {
+      color: var(--sw-brand);
+      background: #ffffff;
+    }
+
+    @media (max-width: 720px) {
+      .sw-entry__head,
+      .sw-entry__actions {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .sw-entry__grid {
+        grid-template-columns: 1fr;
+      }
+
+      .sw-entry__actions a,
+      .sw-entry__actions button {
+        width: 100%;
+      }
+    }
+  </style>
+
+  <div class="sw-entry__head">
+    <div>
+      <h2>消防隐患整改闭环</h2>
+      <p>从现有站点进入工作流，责任人点整改链接提交证据，复核人点复核链接完成闭环。</p>
+    </div>
+    <span class="sw-entry__badge">可复制流程入口</span>
+  </div>
+
+  <div class="sw-entry__grid">
+    <div class="sw-entry__step">
+      <strong>1. 导入 30 条隐患</strong>
+      <p>使用客户 CSV 或真实模板初始化，责任人、复核人、期限和规则随配置包复用。</p>
+    </div>
+    <div class="sw-entry__step">
+      <strong>2. 群内分派整改</strong>
+      <p>复制整改文案到企业微信或钉钉，责任人无需进入后台，只处理自己的链接。</p>
+    </div>
+    <div class="sw-entry__step">
+      <strong>3. 复核并交付闭环包</strong>
+      <p>复核通过后进入闭环包，支持整改证据、催办记录、规则审计和 PDF 归档。</p>
+    </div>
+  </div>
+
+  <div class="sw-entry__actions">
+    <a data-role="workspace" href="https://xf-flow.example.com/">进入工作台</a>
+    <a data-role="rectify" data-variant="ghost" href="https://xf-flow.example.com/#rectify/real-001">示例整改链接</a>
+    <a data-role="review" data-variant="ghost" href="https://xf-flow.example.com/#review/real-001">示例复核链接</a>
+    <button data-role="copy" data-variant="ghost" type="button">复制入口地址</button>
+  </div>
+  <p class="sw-entry__status" data-role="status">入口已就绪，请确认域名为公网 HTTPS。</p>
+
+  <script>
+    (() => {
+      const root = document.currentScript.closest(".sw-entry");
+      const origin = (root.dataset.workflowOrigin || "").replace(/\/$/, "");
+      const hazardId = root.dataset.demoHazardId || "real-001";
+      const links = {
+        workspace: `${origin}/`,
+        rectify: `${origin}/#rectify/${encodeURIComponent(hazardId)}`,
+        review: `${origin}/#review/${encodeURIComponent(hazardId)}`
+      };
+
+      Object.entries(links).forEach(([role, href]) => {
+        const target = root.querySelector(`[data-role="${role}"]`);
+        if (target) target.href = href;
+      });
+
+      const status = root.querySelector('[data-role="status"]');
+      const copyButton = root.querySelector('[data-role="copy"]');
+      copyButton?.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(links.workspace);
+          status.textContent = "已复制工作流入口地址。";
+        } catch {
+          status.textContent = links.workspace;
+        }
+      });
+
+      if (!origin.startsWith("https://")) {
+        status.textContent = "请将 data-workflow-origin 改为公网 HTTPS 地址后再发给客户。";
+      }
+    })();
+  </script>
+</section>
