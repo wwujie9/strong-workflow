@@ -169,16 +169,36 @@ type AssignmentSuggestion = {
   reason: string;
   matchedCount: number;
   items: AssignmentSuggestionItem[];
+  quality: RuleQualityReport;
 };
 
 type AssignmentSuggestionItem = {
   id: string;
   code: string;
   title: string;
+  location: string;
+  category: string;
   owner: string;
   reviewer: string;
   due: string;
+  ruleId: string;
   ruleLabel: string;
+};
+
+type RuleQualityReport = {
+  total: number;
+  matched: number;
+  unmatched: number;
+  topRules: RuleHitStat[];
+  unmatchedItems: AssignmentSuggestionItem[];
+  silentRules: AssignmentRule[];
+};
+
+type RuleHitStat = {
+  ruleId: string;
+  label: string;
+  owner: string;
+  count: number;
 };
 
 type DrillRecord = {
@@ -192,6 +212,11 @@ type DrillRecord = {
   blockingCount: number;
   warningCount: number;
   matchedRuleCount: number;
+  unmatchedRuleCount: number;
+  silentRuleCount: number;
+  topRuleSummary: string;
+  unmatchedSamples: string[];
+  silentRuleSamples: string[];
   suggestedOwner: string;
   suggestedReviewer: string;
   suggestedDue: string;
@@ -630,6 +655,27 @@ function matchAssignmentRule(hazard: Pick<Hazard, "category" | "title" | "descri
   return rules.find((rule) => rule.keywords.some((keyword) => text.includes(keyword.toLowerCase())));
 }
 
+function buildRuleQualityReport(items: AssignmentSuggestionItem[], config: ProjectConfig): RuleQualityReport {
+  const configuredRules = config.assignmentRules?.keywordRules || [];
+  const hitRules = new Set(items.map((item) => item.ruleId).filter((ruleId) => ruleId !== "default"));
+  const counts = items.reduce<Record<string, RuleHitStat>>((acc, item) => {
+    if (item.ruleId === "default") return acc;
+    const current = acc[item.ruleId] || { ruleId: item.ruleId, label: item.ruleLabel, owner: item.owner, count: 0 };
+    return { ...acc, [item.ruleId]: { ...current, count: current.count + 1 } };
+  }, {});
+  const topRules = Object.values(counts).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "zh-CN"));
+  const unmatchedItems = items.filter((item) => item.ruleId === "default");
+  const silentRules = configuredRules.filter((rule) => !hitRules.has(rule.id));
+  return {
+    total: items.length,
+    matched: items.length - unmatchedItems.length,
+    unmatched: unmatchedItems.length,
+    topRules,
+    unmatchedItems,
+    silentRules
+  };
+}
+
 function splitCsvRows(text: string) {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -912,24 +958,28 @@ function App() {
         id: hazard.id,
         code: hazard.code,
         title: hazard.title,
+        location: hazard.location,
+        category: hazard.category,
         owner: hazard.owner === "待分派" ? rule?.owner || fallbackOwner : hazard.owner,
         reviewer: rule?.reviewer || hazard.reviewer || fallbackReviewer,
         due: hazard.due || addDays(new Date().toISOString().slice(0, 10), rule?.dueDays || projectConfig.assignmentRules?.dueDays || 7),
+        ruleId: rule?.id || "default",
         ruleLabel: rule?.label || "默认规则"
       };
     });
     const suggestedOwner = mostCommon(items.map((item) => item.owner), fallbackOwner);
     const suggestedReviewer = mostCommon(items.map((item) => item.reviewer), fallbackReviewer);
     const suggestedDue = mostCommon(items.map((item) => item.due), projectConfig.defaultDue || addDays(new Date().toISOString().slice(0, 10), projectConfig.assignmentRules?.dueDays || 7));
-    const matchedCount = items.filter((item) => item.ruleLabel !== "默认规则").length;
+    const quality = buildRuleQualityReport(items, projectConfig);
     return {
       ids: importedHazards.map((hazard) => hazard.id),
       owner: suggestedOwner,
       reviewer: suggestedReviewer,
       due: suggestedDue,
-      reason: `基于 ${matchedCount} 条规则命中和 ${importedHazards.length - matchedCount} 条默认规则生成`,
-      matchedCount,
-      items
+      reason: `基于 ${quality.matched} 条规则命中和 ${quality.unmatched} 条默认规则生成`,
+      matchedCount: quality.matched,
+      items,
+      quality
     };
   }
 
@@ -1066,6 +1116,11 @@ function App() {
       blockingCount: csvImport.issues.filter((issue) => issue.level === "error").length,
       warningCount: csvImport.issues.filter((issue) => issue.level === "warning").length,
       matchedRuleCount: suggestion.matchedCount,
+      unmatchedRuleCount: suggestion.quality.unmatched,
+      silentRuleCount: suggestion.quality.silentRules.length,
+      topRuleSummary: suggestion.quality.topRules.slice(0, 3).map((rule) => `${rule.label} ${rule.count} 条`).join("；") || "暂无规则命中",
+      unmatchedSamples: suggestion.quality.unmatchedItems.slice(0, 5).map((item) => `${item.code} ${item.title}`),
+      silentRuleSamples: suggestion.quality.silentRules.slice(0, 5).map((rule) => rule.label),
       suggestedOwner: suggestion.owner,
       suggestedReviewer: suggestion.reviewer,
       suggestedDue: suggestion.due
@@ -1165,9 +1220,17 @@ function App() {
       `- 阻断问题：${drillRecord.blockingCount} 个`,
       `- 提醒问题：${drillRecord.warningCount} 个`,
       `- 规则命中：${drillRecord.matchedRuleCount} 条`,
+      `- 未命中隐患：${drillRecord.unmatchedRuleCount} 条`,
+      `- 从未命中规则：${drillRecord.silentRuleCount} 条`,
+      `- 命中最多规则：${drillRecord.topRuleSummary}`,
       `- 建议责任人：${drillRecord.suggestedOwner}`,
       `- 建议复核人：${drillRecord.suggestedReviewer}`,
       `- 建议期限：${drillRecord.suggestedDue}`,
+      "",
+      "## 规则优化线索",
+      "",
+      `- 未命中样例：${drillRecord.unmatchedSamples.length ? drillRecord.unmatchedSamples.join("；") : "暂无"}`,
+      `- 沉默规则样例：${drillRecord.silentRuleSamples.length ? drillRecord.silentRuleSamples.join("；") : "暂无"}`,
       "",
       "## 现场复核项",
       "",
@@ -1391,9 +1454,15 @@ function App() {
         logs: [`按模板规则建议分派：${rule.label} -> ${rule.owner}`, ...baseHazard.logs]
       };
     });
+    const suggestion = buildAssignmentSuggestion(created);
     void saveHazardsBulk([...created, ...hazards], "报告快拆保存失败");
     setSelectedId(created[0].id);
-    appendRobotMessage(`已从报告文本拆出 ${created.length} 条隐患单，等待分派责任人。`);
+    setBatchIds(suggestion.ids);
+    setBatchOwner(suggestion.owner);
+    setBatchReviewer(suggestion.reviewer);
+    setBatchDue(suggestion.due);
+    setAssignmentSuggestion(suggestion);
+    appendRobotMessage(`已从报告文本拆出 ${created.length} 条隐患单，已生成规则命中质量面板和批量分派建议。`);
   }
 
   async function seedPilot30() {
@@ -2330,6 +2399,45 @@ function CustomerOnboardingPanel({
           )}
         </div>
 
+        <div className="quality-card">
+          <strong>规则命中质量</strong>
+          {assignmentSuggestion ? (
+            <>
+              <div className="quality-summary">
+                <span>命中 <strong>{assignmentSuggestion.quality.matched}/{assignmentSuggestion.quality.total}</strong></span>
+                <span>未命中 <strong>{assignmentSuggestion.quality.unmatched}</strong></span>
+                <span>沉默规则 <strong>{assignmentSuggestion.quality.silentRules.length}</strong></span>
+              </div>
+              <div className="quality-section">
+                <span>命中最多</span>
+                <div className="quality-list hit">
+                  {(assignmentSuggestion.quality.topRules.length ? assignmentSuggestion.quality.topRules.slice(0, 4) : [{ ruleId: "empty", label: "暂无规则命中", owner: "请补关键词", count: 0 }]).map((rule) => (
+                    <small key={rule.ruleId}>{rule.label} · {rule.count} 条 · {rule.owner}</small>
+                  ))}
+                </div>
+              </div>
+              <div className="quality-section">
+                <span>未命中隐患</span>
+                <div className="quality-list miss">
+                  {(assignmentSuggestion.quality.unmatchedItems.length ? assignmentSuggestion.quality.unmatchedItems.slice(0, 4) : [{ id: "empty", code: "暂无", title: "本次导入全部命中规则", location: "", category: "", owner: "", reviewer: "", due: "", ruleId: "default", ruleLabel: "默认规则" }]).map((item) => (
+                    <small key={item.id}>{item.code} · {item.title}</small>
+                  ))}
+                </div>
+              </div>
+              <div className="quality-section">
+                <span>从未命中规则</span>
+                <div className="quality-list silent">
+                  {(assignmentSuggestion.quality.silentRules.length ? assignmentSuggestion.quality.silentRules.slice(0, 4) : [{ id: "empty", label: "暂无沉默规则", keywords: [], owner: "规则可保留" }]).map((rule) => (
+                    <small key={rule.id}>{rule.label} · {rule.owner}</small>
+                  ))}
+                </div>
+              </div>
+            </>
+          ) : (
+            <p>完成最近一次 CSV 导入后，这里会显示高频命中、未命中隐患和从未命中的规则，用来反向优化客户模板。</p>
+          )}
+        </div>
+
         <div className="drill-card">
           <strong>导入演练记录</strong>
           {drillRecord ? (
@@ -2338,6 +2446,8 @@ function CustomerOnboardingPanel({
               <div className="suggestion-grid">
                 <span>导入</span><strong>{drillRecord.importedCount} 条</strong>
                 <span>命中</span><strong>{drillRecord.matchedRuleCount} 条</strong>
+                <span>未命中</span><strong>{drillRecord.unmatchedRuleCount} 条</strong>
+                <span>沉默</span><strong>{drillRecord.silentRuleCount} 条</strong>
                 <span>阻断</span><strong>{drillRecord.blockingCount} 个</strong>
                 <span>提醒</span><strong>{drillRecord.warningCount} 个</strong>
               </div>

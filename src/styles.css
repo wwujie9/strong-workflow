@@ -165,13 +165,14 @@ h1 {
 
 .onboarding-grid {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(360px, 1.35fr) minmax(260px, 1fr) minmax(220px, 0.85fr);
+  grid-template-columns: minmax(250px, 1fr) minmax(320px, 1.2fr) minmax(250px, 1fr) minmax(280px, 1.05fr) minmax(220px, 0.85fr);
   gap: 12px;
   align-items: stretch;
 }
 
 .template-library,
 .suggestion-card,
+.quality-card,
 .drill-card {
   display: grid;
   gap: 10px;
@@ -192,6 +193,7 @@ h1 {
 .template-head span,
 .template-library p,
 .suggestion-card p,
+.quality-card p,
 .drill-card p,
 .onboarding-step small {
   color: #667982;
@@ -304,6 +306,71 @@ h1 {
   color: #ffffff;
   background: #14746f;
   font-weight: 800;
+}
+
+.quality-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.quality-summary span {
+  display: grid;
+  gap: 3px;
+  min-height: 48px;
+  padding: 8px;
+  border-radius: 7px;
+  color: #667982;
+  background: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.quality-summary strong {
+  color: #17202a;
+  font-size: 16px;
+}
+
+.quality-section {
+  display: grid;
+  gap: 6px;
+}
+
+.quality-section > span {
+  color: #667982;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.quality-list {
+  display: grid;
+  gap: 5px;
+}
+
+.quality-list small {
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 7px;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quality-list.hit small {
+  color: #176256;
+  background: #edf9f5;
+}
+
+.quality-list.miss small {
+  color: #963126;
+  background: #fff2f0;
+}
+
+.quality-list.silent small {
+  color: #5b6b71;
+  background: #eef2f3;
 }
 
 .setup-grid {
