@@ -157,6 +157,122 @@ h1 {
   margin-bottom: 16px;
 }
 
+.setup-panel,
+.import-panel {
+  margin-bottom: 16px;
+}
+
+.setup-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.setup-grid .field:nth-last-child(-n + 2) {
+  grid-column: span 2;
+}
+
+.setup-grid textarea {
+  width: 100%;
+  min-height: 104px;
+  border: 1px solid #d7e2e6;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #17202a;
+  padding: 8px 10px;
+  resize: vertical;
+  outline: 0;
+}
+
+.inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.compact-upload {
+  min-height: 34px;
+  margin: 0;
+  padding: 0 10px;
+}
+
+.import-empty,
+.import-summary,
+.preview-row,
+.invalid-list {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.import-empty {
+  min-height: 46px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: #3a5960;
+  background: #f7fafb;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.import-preview {
+  display: grid;
+  gap: 10px;
+}
+
+.import-summary {
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #edf9f5;
+  color: #176256;
+}
+
+.import-summary span,
+.invalid-list span {
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.preview-table {
+  display: grid;
+  gap: 8px;
+}
+
+.preview-row {
+  display: grid;
+  grid-template-columns: 110px minmax(120px, 0.8fr) minmax(180px, 1.4fr) auto;
+  min-height: 42px;
+  padding: 9px 10px;
+  border: 1px solid #dce6ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.preview-row strong,
+.preview-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-row span {
+  color: #4f6770;
+  font-size: 13px;
+}
+
+.invalid-list {
+  flex-wrap: wrap;
+  padding: 9px 10px;
+  border-radius: 8px;
+  color: #795300;
+  background: #fff8e3;
+}
+
+.import-actions {
+  justify-content: flex-start;
+}
+
 .config-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -873,10 +989,26 @@ textarea:focus-visible {
   .hero-band,
   .metrics,
   .config-grid,
+  .setup-grid,
   .flow-layout,
   .split,
   .detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .setup-grid .field:nth-last-child(-n + 2) {
+    grid-column: auto;
+  }
+
+  .inline-actions,
+  .import-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .preview-row {
+    grid-template-columns: 1fr;
+    align-items: start;
   }
 
   .top-actions,

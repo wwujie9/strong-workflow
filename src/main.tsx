@@ -81,6 +81,21 @@ type HealthState = {
   dingtalkSignConfigured: boolean;
 };
 
+type ProjectConfig = {
+  customerName: string;
+  projectName: string;
+  maintainerName: string;
+  defaultDue: string;
+  owners: string[];
+  reviewers: string[];
+};
+
+type CsvImportState = {
+  fileName: string;
+  hazards: Hazard[];
+  invalidRows: string[];
+};
+
 const API_BASE = (import.meta.env.VITE_API_BASE || (window.location.port === "5173" ? "http://127.0.0.1:5174/api" : "/api")).replace(/\/$/, "");
 const PUBLIC_BASE = API_BASE.startsWith("http") ? API_BASE.replace(/\/api$/, "") : window.location.origin;
 
@@ -95,8 +110,14 @@ const statusTone: Record<Status, string> = {
   已逾期: "danger"
 };
 
-const ownerOptions = ["待分派", "物业工程-陈工", "物业客服-沈主管", "外包维修-赵师傅", "租户负责人-王店长", "仓储主管-刘主管", "维保项目-李工"];
-const reviewerOptions = ["安全负责人-周经理", "维保项目-李工", "园区安全-林主管", "物业经理-黄经理"];
+const defaultProjectConfig: ProjectConfig = {
+  customerName: "青浦智造产业园",
+  projectName: "青浦智造产业园消防维保试点",
+  maintainerName: "维保项目-李工",
+  defaultDue: "2026-06-15",
+  owners: ["待分派", "物业工程-陈工", "物业客服-沈主管", "外包维修-赵师傅", "租户负责人-王店长", "仓储主管-刘主管", "维保项目-李工"],
+  reviewers: ["安全负责人-周经理", "维保项目-李工", "园区安全-林主管", "物业经理-黄经理"]
+};
 
 const initialHazards: Hazard[] = [
   {
@@ -276,8 +297,129 @@ function useStoredHazards() {
   return [hazards, setHazards] as const;
 }
 
+function useStoredProjectConfig() {
+  const [config, setConfig] = useState<ProjectConfig>(() => {
+    const cached = window.localStorage.getItem("fire-closure-project-config");
+    if (!cached) return defaultProjectConfig;
+    try {
+      const parsed = JSON.parse(cached) as Partial<ProjectConfig>;
+      return {
+        ...defaultProjectConfig,
+        ...parsed,
+        owners: normalizeNameList(parsed.owners || defaultProjectConfig.owners, true),
+        reviewers: normalizeNameList(parsed.reviewers || defaultProjectConfig.reviewers)
+      };
+    } catch {
+      return defaultProjectConfig;
+    }
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem("fire-closure-project-config", JSON.stringify(config));
+  }, [config]);
+
+  return [config, setConfig] as const;
+}
+
+function normalizeNameList(values: string[] | string, includePending = false) {
+  const source = Array.isArray(values) ? values : values.split(/[\n,，;；]+/);
+  const cleaned = source.map((value) => value.trim()).filter(Boolean);
+  const list = includePending ? ["待分派", ...cleaned] : cleaned;
+  return Array.from(new Set(list));
+}
+
+function splitCsvRows(text: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"' && quoted && next === '"') {
+      cell += '"';
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (char === "," && !quoted) {
+      row.push(cell.trim());
+      cell = "";
+      continue;
+    }
+    if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(cell.trim());
+      if (row.some(Boolean)) rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+    cell += char;
+  }
+
+  row.push(cell.trim());
+  if (row.some(Boolean)) rows.push(row);
+  return rows;
+}
+
+function getCsvValue(row: Record<string, string>, names: string[]) {
+  const keys = Object.keys(row);
+  const key = keys.find((item) => names.some((name) => item.toLowerCase() === name.toLowerCase()));
+  return key ? row[key].trim() : "";
+}
+
+function normalizeSeverity(value: string, fallbackText: string): Severity {
+  if (value.includes("重大")) return "重大";
+  if (value.includes("紧急") || value.includes("高")) return "紧急";
+  if (value.includes("普通") || value.includes("一般") || value.includes("低")) return "普通";
+  return inferSeverity(fallbackText);
+}
+
+function createHazardFromCsvRow(row: Record<string, string>, index: number, config: ProjectConfig, existingCount: number): Hazard | null {
+  const description = getCsvValue(row, ["问题描述", "描述", "description", "desc"]);
+  const title = getCsvValue(row, ["标题", "隐患标题", "title"]);
+  const location = getCsvValue(row, ["点位", "位置", "location", "area"]);
+  const sourceText = `${title}${location}${description}`;
+  if (!description && !title && !location) return null;
+
+  const next = existingCount + index + 1;
+  const category = getCsvValue(row, ["隐患类型", "类型", "category", "type"]) || inferCategory(sourceText);
+  const severity = normalizeSeverity(getCsvValue(row, ["风险等级", "等级", "severity", "risk"]), sourceText);
+  const code = getCsvValue(row, ["编号", "单号", "code", "id"]) || `XF-IMP-${String(next).padStart(3, "0")}`;
+  const owner = getCsvValue(row, ["责任人", "owner", "assignee"]) || config.owners.find((item) => item !== "待分派") || "待分派";
+  const reviewer = getCsvValue(row, ["复核人", "reviewer", "checker"]) || config.reviewers[0] || config.maintainerName;
+  const due = getCsvValue(row, ["整改期限", "期限", "due", "deadline"]) || config.defaultDue;
+  const beforeEvidence = getCsvValue(row, ["整改前证据", "证据", "beforeEvidence", "evidence"]);
+
+  return {
+    id: `csv-${Date.now()}-${index}`,
+    code,
+    project: getCsvValue(row, ["项目", "项目名称", "project"]) || config.projectName,
+    location: location || "待确认点位",
+    category,
+    title: title || `${category}隐患整改`,
+    description: description || sourceText || "历史台账导入隐患，请补充问题描述。",
+    suggestion: getCsvValue(row, ["整改建议", "建议", "suggestion"]) || "请按维保建议完成整改，并提交整改后照片/视频。",
+    status: "待分派",
+    severity,
+    owner,
+    reviewer,
+    due,
+    beforeEvidence: beforeEvidence ? [beforeEvidence] : ["CSV 台账导入，待补充现场证据"],
+    afterEvidence: [],
+    updated: "刚刚",
+    logs: ["CSV 台账导入预览确认后生成，等待分派或整改"]
+  };
+}
+
 function App() {
   const [hazards, setHazards] = useStoredHazards();
+  const [projectConfig, setProjectConfig] = useStoredProjectConfig();
   const [messages, setMessages] = useState<ChatMessage[]>(initialChat);
   const [selectedId, setSelectedId] = useState(hazards[0]?.id ?? initialHazards[0].id);
   const [query, setQuery] = useState("");
@@ -288,10 +430,14 @@ function App() {
   const [notice, setNotice] = useState("");
   const [health, setHealth] = useState<HealthState | null>(null);
   const [batchIds, setBatchIds] = useState<string[]>([]);
-  const [batchOwner, setBatchOwner] = useState(ownerOptions[1]);
-  const [batchReviewer, setBatchReviewer] = useState(reviewerOptions[0]);
-  const [batchDue, setBatchDue] = useState("2026-06-15");
+  const [batchOwner, setBatchOwner] = useState(defaultProjectConfig.owners[1]);
+  const [batchReviewer, setBatchReviewer] = useState(defaultProjectConfig.reviewers[0]);
+  const [batchDue, setBatchDue] = useState(defaultProjectConfig.defaultDue);
+  const [csvImport, setCsvImport] = useState<CsvImportState | null>(null);
   const [route, setRoute] = useState<RouteState>(() => parseRoute());
+
+  const ownerOptions = useMemo(() => normalizeNameList(projectConfig.owners, true), [projectConfig.owners]);
+  const reviewerOptions = useMemo(() => normalizeNameList(projectConfig.reviewers), [projectConfig.reviewers]);
 
   useEffect(() => {
     const syncRoute = () => setRoute(parseRoute());
@@ -328,6 +474,88 @@ function App() {
   useEffect(() => {
     refreshHealth();
   }, []);
+
+  useEffect(() => {
+    if (!ownerOptions.includes(batchOwner)) setBatchOwner(ownerOptions.find((owner) => owner !== "待分派") || "待分派");
+    if (!reviewerOptions.includes(batchReviewer)) setBatchReviewer(reviewerOptions[0] || projectConfig.maintainerName);
+    if (projectConfig.defaultDue && batchDue !== projectConfig.defaultDue) setBatchDue(projectConfig.defaultDue);
+  }, [ownerOptions, reviewerOptions, projectConfig.defaultDue, projectConfig.maintainerName]);
+
+  async function previewCsvImport(file: File) {
+    try {
+      const text = await file.text();
+      const rows = splitCsvRows(text.replace(/^\uFEFF/, ""));
+      if (rows.length < 2) {
+        setNotice("CSV 至少需要表头和 1 行隐患数据。");
+        setCsvImport(null);
+        return;
+      }
+      const headers = rows[0].map((header) => header.trim());
+      const invalidRows: string[] = [];
+      const created = rows
+        .slice(1)
+        .map((values, index) => {
+          const row = headers.reduce<Record<string, string>>((acc, header, headerIndex) => {
+            acc[header] = values[headerIndex] || "";
+            return acc;
+          }, {});
+          const hazard = createHazardFromCsvRow(row, index, projectConfig, hazards.length);
+          if (!hazard) invalidRows.push(`第 ${index + 2} 行缺少标题、点位和描述`);
+          return hazard;
+        })
+        .filter((hazard): hazard is Hazard => Boolean(hazard));
+
+      setCsvImport({ fileName: file.name, hazards: created, invalidRows });
+      setNotice(`已解析 ${created.length} 条隐患，${invalidRows.length} 行需要检查。确认后才会写入工作流。`);
+    } catch {
+      setNotice("CSV 解析失败，请确认文件为 UTF-8 编码且使用英文逗号分隔。");
+      setCsvImport(null);
+    }
+  }
+
+  function confirmCsvImport(mode: "append" | "replace") {
+    if (!csvImport || csvImport.hazards.length === 0) {
+      setNotice("没有可导入的隐患数据。");
+      return;
+    }
+    setHazards((current) => (mode === "replace" ? csvImport.hazards : [...csvImport.hazards, ...current]));
+    setSelectedId(csvImport.hazards[0].id);
+    appendRobotMessage(
+      `已${mode === "replace" ? "替换为" : "追加"} ${csvImport.hazards.length} 条 CSV 隐患，默认项目：${projectConfig.projectName}。`
+    );
+    setNotice(`CSV 导入完成：${csvImport.hazards.length} 条隐患已进入工作流。`);
+    setCsvImport(null);
+  }
+
+  function downloadCsvTemplate() {
+    const rows = [
+      ["编号", "项目", "点位", "隐患类型", "标题", "问题描述", "整改建议", "风险等级", "责任人", "复核人", "期限", "整改前证据"],
+      [
+        "XF-IMP-001",
+        projectConfig.projectName,
+        "1F 东侧疏散通道",
+        "消防通道",
+        "疏散通道堆放杂物",
+        "现场发现纸箱占用疏散通道，影响人员疏散。",
+        "清理杂物并上传整改后照片。",
+        "紧急",
+        ownerOptions.find((owner) => owner !== "待分派") || "",
+        reviewerOptions[0] || "",
+        projectConfig.defaultDue,
+        "巡检照片 1 张"
+      ]
+    ];
+    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "消防隐患导入模板.csv";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 300);
+  }
 
   if (!selected) {
     return (
@@ -465,7 +693,7 @@ function App() {
       return {
         id: `hz-${String(next).padStart(3, "0")}`,
         code: `XF-2026-${String(next).padStart(3, "0")}`,
-        project: "试点项目",
+        project: projectConfig.projectName,
         location: line.split("，")[0] || "待确认点位",
         category,
         title: `${category}隐患整改`,
@@ -474,8 +702,8 @@ function App() {
         status: "待分派",
         severity,
         owner: "待分派",
-        reviewer: "安全负责人",
-        due: "2026-06-12",
+        reviewer: reviewerOptions[0] || projectConfig.maintainerName,
+        due: projectConfig.defaultDue,
         beforeEvidence: [`报告原文：${line}`],
         afterEvidence: [],
         updated: "刚刚",
@@ -503,7 +731,7 @@ function App() {
       return {
         id: `hz-${String(number).padStart(3, "0")}`,
         code: `XF-2026-${String(number).padStart(3, "0")}`,
-        project: "南城商业综合体试点",
+        project: projectConfig.projectName || "南城商业综合体试点",
         location: `${Math.floor(index / 6) + 1}F ${String.fromCharCode(65 + (index % 6))} 区`,
         category,
         title,
@@ -512,8 +740,8 @@ function App() {
         status: "待分派",
         severity,
         owner: "待分派",
-        reviewer: "安全负责人-周经理",
-        due: "2026-06-12",
+        reviewer: reviewerOptions[0] || "安全负责人-周经理",
+        due: projectConfig.defaultDue,
         beforeEvidence: [`试点报告第 ${index + 1} 项`],
         afterEvidence: [],
         updated: "刚刚",
@@ -563,9 +791,10 @@ function App() {
       return;
     }
     if (!selected.owner || selected.owner === "待分派") {
-      patchSelected({ owner: "物业工程-默认责任人", status: "待整改" }, "系统补齐默认责任人并生成整改链接");
-      appendRobotMessage(`${selected.code} 已分派给物业工程-默认责任人，请在 ${selected.due} 前提交整改证据。`);
-      notifyRobot("隐患已分派", `${selected.code} 已分派给物业工程-默认责任人，请在 ${selected.due} 前提交整改证据。`);
+      const fallbackOwner = ownerOptions.find((owner) => owner !== "待分派") || projectConfig.maintainerName;
+      patchSelected({ owner: fallbackOwner, status: "待整改" }, "系统按项目配置补齐默认责任人并生成整改链接");
+      appendRobotMessage(`${selected.code} 已分派给 ${fallbackOwner}，请在 ${selected.due} 前提交整改证据。`);
+      notifyRobot("隐患已分派", `${selected.code} 已分派给 ${fallbackOwner}，请在 ${selected.due} 前提交整改证据。`);
       return;
     }
     patchSelected({ status: "待整改" }, `已分派给 ${selected.owner}，生成 H5 整改链接`);
@@ -843,6 +1072,16 @@ function App() {
 
       <ConfigPanel health={health} onRefresh={refreshHealth} onRunReminder={runAutoReminder} />
 
+      <ProjectSetupPanel config={projectConfig} onChange={setProjectConfig} />
+      <CsvImportPanel
+        importState={csvImport}
+        onAppend={() => confirmCsvImport("append")}
+        onCancel={() => setCsvImport(null)}
+        onDownloadTemplate={downloadCsvTemplate}
+        onFileSelect={previewCsvImport}
+        onReplace={() => confirmCsvImport("replace")}
+      />
+
       <section className="flow-layout">
         <section className="panel chat-panel">
           <div className="panel-head">
@@ -899,6 +1138,8 @@ function App() {
             onDueChange={setBatchDue}
             onOwnerChange={setBatchOwner}
             onReviewerChange={setBatchReviewer}
+            ownerOptions={ownerOptions}
+            reviewerOptions={reviewerOptions}
             onSelectFiltered={selectFilteredBatch}
           />
           <div className="hazard-list">
@@ -1189,6 +1430,129 @@ function PortalView({
   );
 }
 
+function ProjectSetupPanel({ config, onChange }: { config: ProjectConfig; onChange: (config: ProjectConfig) => void }) {
+  function patchConfig(partial: Partial<ProjectConfig>) {
+    onChange({ ...config, ...partial });
+  }
+
+  return (
+    <section className="panel setup-panel">
+      <div className="panel-head tight">
+        <div>
+          <h2>项目初始化</h2>
+          <p>按客户现有组织方式配置项目、维保方、责任人和复核人，后续导入/分派自动沿用</p>
+        </div>
+        <Settings size={20} />
+      </div>
+      <div className="setup-grid">
+        <Field label="客户名称">
+          <input value={config.customerName} onChange={(event) => patchConfig({ customerName: event.target.value })} />
+        </Field>
+        <Field label="项目名称">
+          <input value={config.projectName} onChange={(event) => patchConfig({ projectName: event.target.value })} />
+        </Field>
+        <Field label="维保项目负责人">
+          <input value={config.maintainerName} onChange={(event) => patchConfig({ maintainerName: event.target.value })} />
+        </Field>
+        <Field label="默认整改期限">
+          <input type="date" value={config.defaultDue} onChange={(event) => patchConfig({ defaultDue: event.target.value })} />
+        </Field>
+        <Field label="责任人名单（每行一个）">
+          <textarea
+            value={config.owners.filter((owner) => owner !== "待分派").join("\n")}
+            onChange={(event) => patchConfig({ owners: normalizeNameList(event.target.value, true) })}
+          />
+        </Field>
+        <Field label="复核人名单（每行一个）">
+          <textarea value={config.reviewers.join("\n")} onChange={(event) => patchConfig({ reviewers: normalizeNameList(event.target.value) })} />
+        </Field>
+      </div>
+    </section>
+  );
+}
+
+function CsvImportPanel({
+  importState,
+  onAppend,
+  onCancel,
+  onDownloadTemplate,
+  onFileSelect,
+  onReplace
+}: {
+  importState: CsvImportState | null;
+  onAppend: () => void;
+  onCancel: () => void;
+  onDownloadTemplate: () => void;
+  onFileSelect: (file: File) => void;
+  onReplace: () => void;
+}) {
+  return (
+    <section className="panel import-panel">
+      <div className="panel-head tight">
+        <div>
+          <h2>历史台账 CSV 导入</h2>
+          <p>把客户已有 Excel 另存为 CSV，先预览再确认进入整改工作流</p>
+        </div>
+        <div className="inline-actions">
+          <button className="ghost compact" onClick={onDownloadTemplate}>
+            <FileDown size={16} />
+            下载模板
+          </button>
+          <label className="file-upload compact-upload">
+            <Upload size={15} />
+            选择CSV
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) onFileSelect(file);
+                event.currentTarget.value = "";
+              }}
+            />
+          </label>
+        </div>
+      </div>
+
+      {importState ? (
+        <div className="import-preview">
+          <div className="import-summary">
+            <strong>{importState.fileName}</strong>
+            <span>有效 {importState.hazards.length} 条 · 异常 {importState.invalidRows.length} 行</span>
+          </div>
+          <div className="preview-table">
+            {importState.hazards.slice(0, 6).map((hazard) => (
+              <div className="preview-row" key={hazard.id}>
+                <strong>{hazard.code}</strong>
+                <span>{hazard.location}</span>
+                <span>{hazard.title}</span>
+                <StatusPill status={hazard.status} />
+              </div>
+            ))}
+          </div>
+          {importState.invalidRows.length > 0 && (
+            <div className="invalid-list">
+              {importState.invalidRows.slice(0, 3).map((row) => (
+                <span key={row}>{row}</span>
+              ))}
+            </div>
+          )}
+          <div className="batch-actions import-actions">
+            <button onClick={onAppend}>确认导入（追加）</button>
+            <button onClick={onReplace}>替换当前隐患</button>
+            <button onClick={onCancel}>取消</button>
+          </div>
+        </div>
+      ) : (
+        <div className="import-empty">
+          <ShieldCheck size={17} />
+          <span>支持字段：编号、项目、点位、隐患类型、标题、问题描述、整改建议、风险等级、责任人、复核人、期限、整改前证据。</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ConfigPanel({ health, onRefresh, onRunReminder }: { health: HealthState | null; onRefresh: () => void; onRunReminder: () => void }) {
   const apiOk = Boolean(health?.ok);
   const robotOk = Boolean(health?.wecomConfigured || health?.dingtalkConfigured);
@@ -1235,6 +1599,8 @@ function BatchAssignPanel({
   onDueChange,
   onOwnerChange,
   onReviewerChange,
+  ownerOptions,
+  reviewerOptions,
   onSelectFiltered
 }: {
   batchDue: string;
@@ -1246,6 +1612,8 @@ function BatchAssignPanel({
   onDueChange: (value: string) => void;
   onOwnerChange: (value: string) => void;
   onReviewerChange: (value: string) => void;
+  ownerOptions: string[];
+  reviewerOptions: string[];
   onSelectFiltered: () => void;
 }) {
   return (
