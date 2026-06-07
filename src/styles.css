@@ -148,7 +148,7 @@ h1 {
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 14px;
   margin: 16px 0;
 }
@@ -275,7 +275,7 @@ h1 {
 
 .config-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -319,12 +319,25 @@ h1 {
   margin-top: 10px;
 }
 
-.origin-list span {
+.notification-failures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.origin-list span,
+.notification-failures span {
   padding: 6px 8px;
   border-radius: 7px;
   color: #536a73;
   background: #edf2f4;
   font-size: 12px;
+}
+
+.notification-failures span {
+  color: #963126;
+  background: #fff2f0;
 }
 
 .metric,
@@ -973,6 +986,11 @@ textarea:focus-visible {
   .hero-band,
   .flow-layout {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .metrics,
+  .config-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .hero-copy,

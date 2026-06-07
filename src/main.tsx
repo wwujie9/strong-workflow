@@ -48,6 +48,9 @@ type Hazard = {
   afterEvidence: string[];
   rejectReason?: string;
   closedAt?: string;
+  lastReminderAt?: string;
+  reminderCount?: number;
+  escalationLevel?: string;
   updated: string;
   logs: string[];
 };
@@ -79,6 +82,26 @@ type HealthState = {
   wecomConfigured: boolean;
   dingtalkConfigured: boolean;
   dingtalkSignConfigured: boolean;
+  notificationSummary?: NotificationSummary;
+};
+
+type NotificationLog = {
+  id: string;
+  at: string;
+  source: string;
+  title: string;
+  text: string;
+  channels: string[];
+  ok: boolean;
+  dryRun?: boolean;
+  results?: { channel: string; ok: boolean; status: number; text: string }[];
+};
+
+type NotificationSummary = {
+  recent: NotificationLog | null;
+  recentFailures: NotificationLog[];
+  total: number;
+  failed: number;
 };
 
 type ProjectConfig = {
@@ -252,6 +275,31 @@ function extractEvidenceUrl(item: string) {
 
 function isImageUrl(url: string) {
   return /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url);
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char] || char));
+}
+
+function renderEvidenceForPrint(items: string[], empty = "未提交") {
+  const source = items.length ? items : [empty];
+  return source
+    .map((item) => {
+      const url = extractEvidenceUrl(item);
+      const image = url && isImageUrl(url);
+      return `<li>${escapeHtml(item)}${image ? `<br><img class="evidence-thumb" src="${escapeHtml(url)}" alt="证据图片">` : ""}</li>`;
+    })
+    .join("");
+}
+
+function buildGroupMessage(kind: "rectify" | "review" | "reminder", hazard: Hazard) {
+  if (kind === "rectify") {
+    return `【消防隐患整改】\n${hazard.code} ${hazard.title}\n项目：${hazard.project}\n点位：${hazard.location}\n责任人：${hazard.owner}\n整改期限：${hazard.due}\n整改要求：${hazard.suggestion}\n整改链接：${buildAppLink("rectify", hazard.id)}`;
+  }
+  if (kind === "review") {
+    return `【消防隐患复核】\n${hazard.code} ${hazard.title}\n项目：${hazard.project}\n点位：${hazard.location}\n复核人：${hazard.reviewer}\n当前状态：${hazard.status}\n整改后证据：${hazard.afterEvidence.length} 项\n复核链接：${buildAppLink("review", hazard.id)}`;
+  }
+  return `【消防整改催办】\n${hazard.code} ${hazard.title}\n点位：${hazard.location}\n责任人：${hazard.owner}\n期限：${hazard.due}\n当前状态：${hazard.status}\n催办级别：${hazard.escalationLevel || "一级催办"}\n累计催办：${hazard.reminderCount || 0} 次\n整改链接：${buildAppLink("rectify", hazard.id)}`;
 }
 
 function canSubmitEvidence(status: Status) {
@@ -455,7 +503,9 @@ function App() {
     const reviewing = hazards.filter((hazard) => hazard.status === "待复核").length;
     const open = hazards.filter((hazard) => !["已闭环"].includes(hazard.status)).length;
     const closedRate = hazards.length ? Math.round((hazards.filter((hazard) => hazard.status === "已闭环").length / hazards.length) * 100) : 0;
-    return { overdue, reviewing, open, closedRate };
+    const assigned = hazards.filter((hazard) => hazard.owner && hazard.owner !== "待分派").length;
+    const submitted = hazards.filter((hazard) => hazard.afterEvidence.length > 0).length;
+    return { overdue, reviewing, open, closedRate, assigned, submitted };
   }, [hazards]);
 
   function refreshHealth() {
@@ -571,12 +621,14 @@ function App() {
     setMessages((current) => [{ from: "整改闭环助手", body, time: "刚刚", kind }, ...current]);
   }
 
-  function notifyRobot(title: string, text: string) {
+  function notifyRobot(title: string, text: string, source = "manual") {
     fetch(`${API_BASE}/notify`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, text })
-    }).catch(() => undefined);
+      body: JSON.stringify({ title, text, source })
+    })
+      .then(() => refreshHealth())
+      .catch(() => undefined);
   }
 
   async function saveHazardsBulk(nextHazards: Hazard[], reason: string) {
@@ -662,7 +714,7 @@ function App() {
     }
     setNotice(`已批量分派 ${assignedCodes.length} 条隐患。`);
     appendRobotMessage(`已批量分派 ${assignedCodes.length} 条隐患给 ${batchOwner}，复核人 ${batchReviewer}。`);
-    notifyRobot("批量分派完成", `${assignedCodes.join("、")}\n责任人：${batchOwner}\n复核人：${batchReviewer}\n期限：${batchDue}`);
+    notifyRobot("批量分派完成", `${assignedCodes.join("、")}\n责任人：${batchOwner}\n复核人：${batchReviewer}\n期限：${batchDue}`, "assign");
   }
 
   async function runAutoReminder() {
@@ -676,6 +728,7 @@ function App() {
       const payload = (await response.json()) as { count: number };
       const remote = await fetch(`${API_BASE}/hazards`);
       if (remote.ok) setHazards((await remote.json()) as Hazard[]);
+      refreshHealth();
       setNotice(`已执行自动催办扫描，触发 ${payload.count} 条提醒。`);
       appendRobotMessage(`自动催办扫描完成，触发 ${payload.count} 条提醒。`, payload.count > 0 ? "warning" : "robot");
     } catch {
@@ -840,7 +893,7 @@ function App() {
         })
       );
       appendRobotMessage(`${selected.code} 已分派给 ${fallbackOwner}，请在 ${selected.due} 前提交整改证据。`);
-      notifyRobot("隐患已分派", `${selected.code} 已分派给 ${fallbackOwner}，请在 ${selected.due} 前提交整改证据。`);
+      notifyRobot("隐患已分派", buildGroupMessage("rectify", { ...selected, owner: fallbackOwner }), "assign");
       return;
     }
     void runHazardAction(
@@ -860,7 +913,7 @@ function App() {
       })
     );
     appendRobotMessage(`${selected.code} 已分派给 ${selected.owner}，整改链接已发送。`);
-    notifyRobot("整改链接已生成", `${selected.code} 已分派给 ${selected.owner}。\n整改链接：${buildAppLink("rectify", selected.id)}`);
+    notifyRobot("整改链接已生成", buildGroupMessage("rectify", selected), "assign");
   }
 
   function openRectifyLink() {
@@ -894,7 +947,7 @@ function App() {
     );
     setEvidenceDraft("");
     appendRobotMessage(`${selected.code} 已提交整改证据，等待 ${selected.reviewer} 复核。`);
-    notifyRobot("整改证据已提交", `${selected.code} 已提交整改证据，等待 ${selected.reviewer} 复核。\n复核链接：${buildAppLink("review", selected.id)}`);
+    notifyRobot("整改证据已提交", buildGroupMessage("review", { ...selected, status: "待复核", afterEvidence: [...selected.afterEvidence, value] }), "evidence");
   }
 
   async function uploadEvidenceFile(file: File) {
@@ -921,7 +974,7 @@ function App() {
         })
       );
       appendRobotMessage(`${selected.code} 已上传整改文件，等待 ${selected.reviewer} 复核。`);
-      notifyRobot("整改文件已上传", `${selected.code} 已上传整改文件：${uploaded.originalName}`);
+      notifyRobot("整改文件已上传", buildGroupMessage("review", { ...selected, status: "待复核", afterEvidence: [...selected.afterEvidence, evidence] }), "evidence");
     } catch {
       setNotice("文件上传失败，请确认本地 API 服务已启动。");
     }
@@ -949,7 +1002,7 @@ function App() {
       })
     );
     appendRobotMessage(`${selected.code} 已闭环，已自动进入本月消防整改归档包。`);
-    notifyRobot("隐患已闭环", `${selected.code} 已由 ${selected.reviewer} 复核通过，进入本月消防整改归档包。`);
+    notifyRobot("隐患已闭环", `${selected.code} 已由 ${selected.reviewer} 复核通过，进入本月消防整改归档包。`, "review");
   }
 
   function rejectReview() {
@@ -969,7 +1022,7 @@ function App() {
       })
     );
     appendRobotMessage(`${selected.code} 复核驳回，已通知 ${selected.owner} 补充证据。`, "warning");
-    notifyRobot("复核驳回", `${selected.code} 复核驳回，已通知 ${selected.owner} 补充证据。`);
+    notifyRobot("复核驳回", `${selected.code} 复核驳回，已通知 ${selected.owner} 补充证据。\n${buildGroupMessage("rectify", selected)}`, "review");
   }
 
   function sendReminder() {
@@ -983,12 +1036,15 @@ function App() {
       (hazard) => ({
         ...hazard,
         status: "已逾期",
+        lastReminderAt: new Date().toISOString(),
+        reminderCount: (hazard.reminderCount || 0) + 1,
+        escalationLevel: (hazard.reminderCount || 0) + 1 >= 3 ? "三级升级" : (hazard.reminderCount || 0) + 1 >= 2 ? "二级升级" : "一级催办",
         updated: "刚刚",
         logs: [`催办 ${hazard.owner}，并记录逾期升级`, ...hazard.logs]
       })
     );
     appendRobotMessage(`${selected.code} 已催办 ${selected.owner}；若 24 小时内未处理，将升级给上级负责人。`, "warning");
-    notifyRobot("整改催办/升级", `${selected.code} 已催办 ${selected.owner}；若 24 小时内未处理，将升级给上级负责人。`);
+    notifyRobot("整改催办/升级", buildGroupMessage("reminder", { ...selected, status: "已逾期", reminderCount: (selected.reminderCount || 0) + 1 }), "reminder");
   }
 
   function exportClosurePack() {
@@ -1015,7 +1071,9 @@ function App() {
       total: hazards.length,
       closed: hazards.filter((hazard) => hazard.status === "已闭环").length,
       reviewing: hazards.filter((hazard) => hazard.status === "待复核").length,
-      overdue: hazards.filter((hazard) => hazard.status === "已逾期" || hazard.status === "已驳回").length
+      overdue: hazards.filter((hazard) => hazard.status === "已逾期" || hazard.status === "已驳回").length,
+      assigned: hazards.filter((hazard) => hazard.owner && hazard.owner !== "待分派").length,
+      remediated: hazards.filter((hazard) => hazard.afterEvidence.length > 0).length
     };
     const rows = hazards
       .map(
@@ -1032,11 +1090,11 @@ function App() {
               <div>期限</div><div>${hazard.due}</div>
             </div>
             <h3>整改前证据</h3>
-            <ul>${hazard.beforeEvidence.map((item) => `<li>${item}</li>`).join("")}</ul>
+            <ul>${renderEvidenceForPrint(hazard.beforeEvidence)}</ul>
             <h3>整改后证据</h3>
-            <ul>${hazard.afterEvidence.map((item) => `<li>${item}</li>`).join("") || "<li>未提交</li>"}</ul>
+            <ul>${renderEvidenceForPrint(hazard.afterEvidence)}</ul>
             <h3>流程日志</h3>
-            <ul>${hazard.logs.map((item) => `<li>${item}</li>`).join("")}</ul>
+            <ul>${hazard.logs.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
           </section>`
       )
       .join("");
@@ -1050,18 +1108,37 @@ function App() {
       .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:16px 0}
       .summary div{border:1px solid #d9e3e7;border-radius:6px;padding:10px}
       .summary strong{display:block;font-size:20px}
+      .cover{min-height:78vh;display:grid;align-content:center;border-bottom:3px solid #14746f;margin-bottom:18px}
+      .cover h1{font-size:30px;margin-bottom:12px}
+      .cover-grid{display:grid;grid-template-columns:110px 1fr;gap:8px 14px;margin:20px 0 26px;font-size:13px}
+      .cover-grid div:nth-child(odd){color:#697c84;font-weight:700}
+      .cover-note{border-left:4px solid #14746f;padding:10px 12px;background:#edf9f5;font-size:13px}
       .item{break-inside:avoid;border:1px solid #d9e3e7;border-radius:8px;padding:12px;margin:12px 0}
       .grid{display:grid;grid-template-columns:90px 1fr 90px 1fr;gap:6px 10px;font-size:12px}
       li{font-size:12px;margin:4px 0;word-break:break-all}
+      .evidence-thumb{display:block;width:160px;max-height:120px;object-fit:cover;margin-top:6px;border:1px solid #d9e3e7;border-radius:6px}
       .toolbar{position:sticky;top:0;padding:10px 0 14px;background:#fff}
       button{height:36px;border:0;border-radius:6px;background:#14746f;color:#fff;font-weight:700;padding:0 14px}
-      @media print{.toolbar{display:none}.item{page-break-inside:avoid}}
+      @media print{.toolbar{display:none}.cover{page-break-after:always}.item{page-break-inside:avoid}}
     </style></head><body>
       <div class="toolbar"><button onclick="window.print()">打印/另存为 PDF</button></div>
-      <h1>消防隐患整改闭环包</h1>
-      <p class="muted">生成时间：${todayText()} · 系统地址：${PUBLIC_BASE}</p>
+      <section class="cover">
+        <p class="muted">消防整改闭环交付物</p>
+        <h1>${escapeHtml(projectConfig.projectName)}<br>消防隐患整改闭环包</h1>
+        <div class="cover-grid">
+          <div>客户名称</div><div>${escapeHtml(projectConfig.customerName)}</div>
+          <div>维保负责人</div><div>${escapeHtml(projectConfig.maintainerName)}</div>
+          <div>生成时间</div><div>${escapeHtml(todayText())}</div>
+          <div>系统地址</div><div>${escapeHtml(PUBLIC_BASE)}</div>
+        </div>
+        <div class="cover-note">本闭环包汇总隐患分派、整改提交、复核、驳回、催办和闭环记录，适用于试点项目内部汇报与月度归档。</div>
+      </section>
+      <h1>项目摘要</h1>
+      <p class="muted">${escapeHtml(projectConfig.customerName)} · ${escapeHtml(projectConfig.maintainerName)}</p>
       <section class="summary">
         <div><span>隐患总数</span><strong>${summary.total}</strong></div>
+        <div><span>已分派</span><strong>${summary.assigned}</strong></div>
+        <div><span>已提交整改</span><strong>${summary.remediated}</strong></div>
         <div><span>已闭环</span><strong>${summary.closed}</strong></div>
         <div><span>待复核</span><strong>${summary.reviewing}</strong></div>
         <div><span>逾期/驳回</span><strong>${summary.overdue}</strong></div>
@@ -1152,6 +1229,8 @@ function App() {
 
       <section className="metrics">
         <Metric icon={ClipboardCheck} label="未闭环隐患" value={`${stats.open} 条`} note="待分派/整改/复核/驳回" />
+        <Metric icon={UserRoundCheck} label="已分派" value={`${stats.assigned} 条`} note="责任人已明确" />
+        <Metric icon={Upload} label="已提交整改" value={`${stats.submitted} 条`} note="责任人已上传证据" />
         <Metric icon={UserRoundCheck} label="待复核" value={`${stats.reviewing} 条`} note="复核人通过后才算闭环" />
         <Metric icon={AlertTriangle} label="逾期/驳回" value={`${stats.overdue} 条`} note="自动催办并升级" />
         <Metric icon={ShieldCheck} label="闭环率" value={`${stats.closedRate}%`} note="本月消防整改结果" />
@@ -1303,6 +1382,8 @@ function App() {
                 <input type="date" value={selected.due} onChange={(event) => updateSelected("due", event.target.value)} />
               </Field>
               <Info label="整改链接" value={buildAppLink("rectify", selected.id)} />
+              <Info label="催办状态" value={`${selected.escalationLevel || "未催办"} · ${selected.reminderCount || 0} 次`} />
+              <Info label="最近催办" value={selected.lastReminderAt ? new Date(selected.lastReminderAt).toLocaleString("zh-CN") : "暂无"} />
             </div>
             <div className="description-block">
               <strong>问题描述</strong>
@@ -1322,6 +1403,18 @@ function App() {
               <button onClick={() => copyText(buildAppLink("review", selected.id), "复核链接")}>
                 <Copy size={17} />
                 复制复核链接
+              </button>
+              <button onClick={() => copyText(buildGroupMessage("rectify", selected), "整改群消息")}>
+                <MessageSquareText size={17} />
+                复制整改文案
+              </button>
+              <button onClick={() => copyText(buildGroupMessage("review", selected), "复核群消息")}>
+                <MessageSquareText size={17} />
+                复制复核文案
+              </button>
+              <button onClick={() => copyText(buildGroupMessage("reminder", selected), "催办群消息")}>
+                <MessageSquareText size={17} />
+                复制催办文案
               </button>
               <button onClick={openRectifyLink}>
                 <Upload size={17} />
@@ -1643,6 +1736,8 @@ function CsvImportPanel({
 function ConfigPanel({ health, onRefresh, onRunReminder }: { health: HealthState | null; onRefresh: () => void; onRunReminder: () => void }) {
   const apiOk = Boolean(health?.ok);
   const robotOk = Boolean(health?.wecomConfigured || health?.dingtalkConfigured);
+  const recentNotification = health?.notificationSummary?.recent;
+  const notificationOk = recentNotification ? recentNotification.ok : robotOk;
   return (
     <section className="panel config-panel">
       <div className="panel-head tight">
@@ -1664,9 +1759,22 @@ function ConfigPanel({ health, onRefresh, onRunReminder }: { health: HealthState
         <ConfigItem icon={Link2} label="HTTPS" value={health?.httpsEnabled ? "已启用" : "未启用"} ok={Boolean(health?.httpsEnabled)} />
         <ConfigItem icon={Upload} label="上传限制" value={health ? `${health.maxUploadMb}MB · ${health.uploadDir}` : "待检查"} ok={Boolean(health?.uploadDir)} />
         <ConfigItem icon={MessageSquareText} label="机器人" value={robotOk ? `已配置${health?.dingtalkSignConfigured ? " · 钉钉加签" : ""}` : "dry-run"} ok={robotOk} />
+        <ConfigItem
+          icon={MessageSquareText}
+          label="最近通知"
+          value={recentNotification ? `${recentNotification.ok ? "成功" : "失败"} · ${recentNotification.dryRun ? "dry-run" : recentNotification.title}` : "暂无记录"}
+          ok={Boolean(notificationOk)}
+        />
         <ConfigItem icon={Link2} label="公开链接" value={health?.publicBaseUrl || PUBLIC_BASE} ok={Boolean(health?.publicBaseUrl)} />
         <ConfigItem icon={BellRing} label="自动催办" value={health?.reminderJobEnabled ? `${health.reminderIntervalMinutes} 分钟` : "未启用"} ok={Boolean(health?.reminderJobEnabled)} />
       </div>
+      {health?.notificationSummary?.recentFailures?.length ? (
+        <div className="notification-failures">
+          {health.notificationSummary.recentFailures.slice(0, 3).map((item) => (
+            <span key={item.id}>{new Date(item.at).toLocaleString("zh-CN")} · {item.title}</span>
+          ))}
+        </div>
+      ) : null}
       <div className="origin-list">
         {(health?.allowedOrigins || []).map((origin) => (
           <span key={origin}>{origin}</span>

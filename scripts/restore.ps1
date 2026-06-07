@@ -28,9 +28,11 @@ function Assert-InProjectPath {
 $Root = Resolve-Root $Root
 $ArchivePath = (Resolve-Path $ArchivePath).Path
 $dataFile = Join-Path $Root "data\hazards.json"
+$notificationFile = Join-Path $Root "data\notifications.json"
 $uploadDir = Join-Path $Root "server\uploads"
 
 Assert-InProjectPath -RootPath $Root -TargetPath $dataFile
+Assert-InProjectPath -RootPath $Root -TargetPath $notificationFile
 Assert-InProjectPath -RootPath $Root -TargetPath $uploadDir
 
 if (-not $SkipPreBackup) {
@@ -43,6 +45,7 @@ New-Item -ItemType Directory -Path $tempDir | Out-Null
 try {
   Expand-Archive -Path $ArchivePath -DestinationPath $tempDir -Force
   $restoreDataFile = Join-Path $tempDir "data\hazards.json"
+  $restoreNotificationFile = Join-Path $tempDir "data\notifications.json"
   $restoreUploadDir = Join-Path $tempDir "server\uploads"
 
   if (-not (Test-Path $restoreDataFile)) {
@@ -51,6 +54,10 @@ try {
 
   New-Item -ItemType Directory -Path (Split-Path $dataFile -Parent) -Force | Out-Null
   Copy-Item -LiteralPath $restoreDataFile -Destination $dataFile -Force
+
+  if (Test-Path $restoreNotificationFile) {
+    Copy-Item -LiteralPath $restoreNotificationFile -Destination $notificationFile -Force
+  }
 
   if (Test-Path $restoreUploadDir) {
     if (Test-Path $uploadDir) {

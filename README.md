@@ -46,6 +46,12 @@ http://127.0.0.1:5174
 http://127.0.0.1:5174/api/health
 ```
 
+最近通知日志：
+
+```text
+http://127.0.0.1:5174/api/notifications
+```
+
 开发模式：
 
 ```powershell
@@ -66,6 +72,7 @@ npm run server
 7. 可在左侧选择多条隐患，批量设置责任人、复核人和期限。
 8. 打开复核页，复核通过或驳回。
 9. 点击“导出闭环包”生成 HTML 归档包，点击“PDF闭环包”打开打印页并另存为 PDF。
+10. 需要发群时，可直接复制整改、复核、催办群消息文案。
 
 演示数据入口：
 
@@ -131,6 +138,8 @@ npm run server
 
 未配置机器人时，通知接口会返回 `dryRun: true`，不会真实发送外部消息。
 
+每次通知都会写入 `data/notifications.json`。配置面板会展示最近通知状态和最近失败记录；上线前如果仍是 `dry-run`，说明还没有接真实机器人。
+
 ## HTTPS 与自动催办
 
 若由 Node 直接提供 HTTPS：
@@ -159,6 +168,8 @@ npm run server
 ```text
 POST http://127.0.0.1:5174/api/reminders/run
 ```
+
+自动催办会写入 `lastReminderAt`、`reminderCount` 和 `escalationLevel`，普通定时扫描按 24 小时频控，手动“跑催办”会强制扫描。
 
 ## 当前边界
 

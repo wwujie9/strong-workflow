@@ -42,6 +42,7 @@ const port = Number(process.env.PORT || 5174);
 const publicBaseUrl = (process.env.PUBLIC_BASE_URL || `http://${host}:${port}`).replace(/\/$/, "");
 const dataFile = resolveWorkspacePath(process.env.DATA_FILE, "data/hazards.json");
 const dataDir = path.dirname(dataFile);
+const notificationFile = resolveWorkspacePath(process.env.NOTIFICATION_FILE, "data/notifications.json");
 const uploadDir = resolveWorkspacePath(process.env.UPLOAD_DIR, "server/uploads");
 const maxUploadMb = Number(process.env.MAX_UPLOAD_MB || 15);
 const httpsCertFile = process.env.HTTPS_CERT_FILE ? resolveWorkspacePath(process.env.HTTPS_CERT_FILE, "") : "";
@@ -195,6 +196,34 @@ async function writeHazards(hazards) {
   await fs.rename(tmpFile, dataFile);
 }
 
+async function readNotifications() {
+  await fs.mkdir(path.dirname(notificationFile), { recursive: true });
+  try {
+    const raw = await fs.readFile(notificationFile, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+async function writeNotifications(notifications) {
+  await fs.mkdir(path.dirname(notificationFile), { recursive: true });
+  const tmpFile = `${notificationFile}.tmp`;
+  await fs.writeFile(tmpFile, JSON.stringify(notifications.slice(0, 100), null, 2), "utf8");
+  await fs.rename(tmpFile, notificationFile);
+}
+
+async function appendNotificationLog(entry) {
+  const notifications = await readNotifications();
+  const nextEntry = {
+    id: crypto.randomUUID(),
+    at: new Date().toISOString(),
+    ...entry
+  };
+  await writeNotifications([nextEntry, ...notifications]);
+  return nextEntry;
+}
+
 function isValidHazard(hazard) {
   const statuses = new Set(["待分派", "待整改", "待复核", "已驳回", "已闭环", "已逾期"]);
   const severities = new Set(["重大", "紧急", "普通"]);
@@ -337,12 +366,17 @@ function applyHazardAction(hazard, action, payload = {}) {
   if (action === "remind") {
     if (hazard.status === "已闭环") return { error: "closed hazard does not need reminders", status: 409 };
     if (hazard.status === "待分派") return { error: "unassigned hazard cannot be reminded", status: 409 };
+    const nextReminderCount = Number(hazard.reminderCount || 0) + 1;
+    const escalationLevel = nextReminderCount >= 3 ? "三级升级" : nextReminderCount >= 2 ? "二级升级" : "一级催办";
     return {
       hazard: {
         ...hazard,
         status: "已逾期",
+        lastReminderAt: new Date().toISOString(),
+        reminderCount: nextReminderCount,
+        escalationLevel,
         updated: "刚刚",
-        logs: [logPrefix || `催办 ${hazard.owner}，并记录逾期升级`, ...hazard.logs]
+        logs: [logPrefix || `催办 ${hazard.owner}，${escalationLevel}，累计 ${nextReminderCount} 次`, ...hazard.logs]
       }
     };
   }
@@ -402,23 +436,68 @@ function buildDingTalkWebhookUrl() {
   return url.toString();
 }
 
-async function sendWebhook({ title, text }) {
+async function sendWebhook({ title, text, source = "manual" }) {
   const results = [];
+  const channels = [];
+  if (!process.env.WECOM_WEBHOOK_URL && !process.env.DINGTALK_WEBHOOK_URL) {
+    console.log(`[notify:dry-run] ${title}\n${text}`);
+    await appendNotificationLog({
+      source,
+      title,
+      text,
+      channels: [],
+      ok: true,
+      dryRun: true,
+      results: []
+    });
+    return [];
+  }
   if (process.env.WECOM_WEBHOOK_URL) {
-    results.push(
-      await postJson(process.env.WECOM_WEBHOOK_URL, {
+    channels.push("wecom");
+    let result;
+    try {
+      result = await postJson(process.env.WECOM_WEBHOOK_URL, {
         msgtype: "markdown",
         markdown: { content: `**${title}**\n\n${text}` }
-      })
-    );
+      });
+    } catch (error) {
+      result = { ok: false, status: 0, text: String(error.message || error) };
+    }
+    results.push({ channel: "wecom", ...result });
   }
   if (process.env.DINGTALK_WEBHOOK_URL) {
-    results.push(
-      await postJson(buildDingTalkWebhookUrl(), {
+    channels.push("dingtalk");
+    let result;
+    try {
+      result = await postJson(buildDingTalkWebhookUrl(), {
         msgtype: "markdown",
         markdown: { title, text: `### ${title}\n${text}` }
-      })
-    );
+      });
+    } catch (error) {
+      result = { ok: false, status: 0, text: String(error.message || error) };
+    }
+    results.push({ channel: "dingtalk", ...result });
+  }
+
+  const ok = results.length > 0 && results.every((result) => result.ok);
+  await appendNotificationLog({
+    source,
+    title,
+    text,
+    channels,
+    ok,
+    dryRun: false,
+    results: results.map((result) => ({
+      channel: result.channel,
+      ok: result.ok,
+      status: result.status,
+      text: String(result.text || "").slice(0, 500)
+    }))
+  });
+
+  if (!ok) {
+    const failed = results.filter((result) => !result.ok).map((result) => `${result.channel}:${result.status}`).join(", ");
+    throw new Error(`webhook failed: ${failed || "no channel"}`);
   }
   return results;
 }
@@ -436,7 +515,6 @@ async function runReminderScan({ force = false } = {}) {
   const hazards = await readHazards();
   const now = new Date();
   const soon = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  const stamp = dayStamp();
   let changed = false;
   const reminders = [];
 
@@ -447,23 +525,31 @@ async function runReminderScan({ force = false } = {}) {
     const overdue = dueDate.getTime() < now.getTime();
     const dueSoon = dueDate.getTime() <= soon.getTime();
     if (!force && !overdue && !dueSoon) return hazard;
-    const reminderKey = `自动催办:${stamp}`;
-    if (!force && hazard.logs.some((log) => log.includes(reminderKey))) return hazard;
+    const lastReminderAt = hazard.lastReminderAt ? new Date(hazard.lastReminderAt) : null;
+    if (!force && lastReminderAt && now.getTime() - lastReminderAt.getTime() < 24 * 60 * 60 * 1000) return hazard;
 
     const nextStatus = overdue ? "已逾期" : hazard.status;
-    const message = `${reminderKey} ${hazard.code} ${overdue ? "已逾期" : "即将到期"}，已提醒 ${hazard.owner}，复核人 ${hazard.reviewer}`;
+    const nextReminderCount = Number(hazard.reminderCount || 0) + 1;
+    const escalationLevel = nextReminderCount >= 3 ? "三级升级" : nextReminderCount >= 2 ? "二级升级" : "一级催办";
+    const message = `自动催办:${dayStamp()} ${hazard.code} ${overdue ? "已逾期" : "即将到期"}，${escalationLevel}，已提醒 ${hazard.owner}，复核人 ${hazard.reviewer}`;
     reminders.push({
+      id: hazard.id,
       code: hazard.code,
       owner: hazard.owner,
       reviewer: hazard.reviewer,
       due: hazard.due,
       overdue,
-      status: nextStatus
+      status: nextStatus,
+      reminderCount: nextReminderCount,
+      escalationLevel
     });
     changed = true;
     return {
       ...hazard,
       status: nextStatus,
+      lastReminderAt: now.toISOString(),
+      reminderCount: nextReminderCount,
+      escalationLevel,
       updated: "自动催办",
       logs: [message, ...hazard.logs]
     };
@@ -473,7 +559,8 @@ async function runReminderScan({ force = false } = {}) {
     await writeHazards(nextHazards);
     await sendWebhook({
       title: "自动催办提醒",
-      text: reminders.map((item) => `- ${item.code} ${item.overdue ? "已逾期" : "即将到期"}，责任人：${item.owner}，期限：${item.due}`).join("\n")
+      source: "reminder",
+      text: reminders.map((item) => `- ${item.code} ${item.overdue ? "已逾期" : "即将到期"}，${item.escalationLevel}，责任人：${item.owner}，期限：${item.due}`).join("\n")
     });
   }
 
@@ -495,13 +582,27 @@ app.use(
 app.use(express.json({ limit: "2mb" }));
 app.use("/uploads", express.static(uploadDir));
 
-app.get("/api/health", (_req, res) => {
+async function getNotificationSummary() {
+  const notifications = await readNotifications();
+  const recent = notifications[0] || null;
+  const failures = notifications.filter((item) => !item.ok).slice(0, 5);
+  return {
+    recent,
+    recentFailures: failures,
+    total: notifications.length,
+    failed: notifications.filter((item) => !item.ok).length
+  };
+}
+
+app.get("/api/health", async (_req, res) => {
+  const notificationSummary = await getNotificationSummary();
   res.json({
     ok: true,
     host,
     port,
     publicBaseUrl,
     dataFile,
+    notificationFile,
     uploadDir,
     maxUploadMb,
     allowedOrigins,
@@ -512,8 +613,13 @@ app.get("/api/health", (_req, res) => {
     reminderIntervalMinutes,
     wecomConfigured: Boolean(process.env.WECOM_WEBHOOK_URL),
     dingtalkConfigured: Boolean(process.env.DINGTALK_WEBHOOK_URL),
-    dingtalkSignConfigured: Boolean(process.env.DINGTALK_SECRET)
+    dingtalkSignConfigured: Boolean(process.env.DINGTALK_SECRET),
+    notificationSummary
   });
+});
+
+app.get("/api/notifications", async (_req, res) => {
+  res.json(await readNotifications());
 });
 
 app.get("/api/hazards", async (_req, res) => {
@@ -603,14 +709,10 @@ app.post("/api/upload", upload.single("file"), (req, res) => {
 });
 
 app.post("/api/notify", async (req, res) => {
-  const { title = "消防整改闭环助手", text = "" } = req.body ?? {};
-  if (!process.env.WECOM_WEBHOOK_URL && !process.env.DINGTALK_WEBHOOK_URL) {
-    console.log(`[notify:dry-run] ${title}\n${text}`);
-    res.json({ ok: true, dryRun: true });
-    return;
-  }
+  const { title = "消防整改闭环助手", text = "", source = "manual" } = req.body ?? {};
   try {
-    res.json({ ok: true, results: await sendWebhook({ title, text }) });
+    const results = await sendWebhook({ title, text, source });
+    res.json({ ok: true, dryRun: results.length === 0, results });
   } catch (error) {
     res.status(500).json({ ok: false, error: String(error) });
   }

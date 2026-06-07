@@ -32,10 +32,14 @@ New-Item -ItemType Directory -Path (Join-Path $stageDir "data") | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $stageDir "server") | Out-Null
 
 $dataFile = Join-Path $Root "data\hazards.json"
+$notificationFile = Join-Path $Root "data\notifications.json"
 $uploadDir = Join-Path $Root "server\uploads"
 
 if (Test-Path $dataFile) {
   Copy-Item -LiteralPath $dataFile -Destination (Join-Path $stageDir "data\hazards.json") -Force
+}
+if (Test-Path $notificationFile) {
+  Copy-Item -LiteralPath $notificationFile -Destination (Join-Path $stageDir "data\notifications.json") -Force
 }
 if (Test-Path $uploadDir) {
   Copy-Item -LiteralPath $uploadDir -Destination (Join-Path $stageDir "server\uploads") -Recurse -Force
@@ -46,6 +50,7 @@ $manifest = [ordered]@{
   createdAt = (Get-Date).ToString("s")
   root = $Root
   dataFile = $dataFile
+  notificationFile = $notificationFile
   uploadDir = $uploadDir
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $stageDir "manifest.json") -Encoding utf8

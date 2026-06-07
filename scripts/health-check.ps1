@@ -38,10 +38,12 @@ $result = [ordered]@{
   port = $health.port
   publicBaseUrl = $health.publicBaseUrl
   dataFile = $health.dataFile
+  notificationFile = $health.notificationFile
   uploadDir = $health.uploadDir
   httpsEnabled = $health.httpsEnabled
   reminderJobEnabled = $health.reminderJobEnabled
   robotConfigured = [bool]($health.wecomConfigured -or $health.dingtalkConfigured)
+  notificationSummary = $health.notificationSummary
   issues = $issues
 }
 
