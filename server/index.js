@@ -113,7 +113,13 @@ const defaultProjectConfig = {
   assignmentRules: {
     fallbackOwner: "物业工程-陈工",
     fallbackReviewer: "安全负责人-周经理",
-    dueDays: 7
+    dueDays: 7,
+    keywordRules: [
+      { id: "door-outsourced", label: "防火门/闭门器", keywords: ["防火门", "闭门器", "顺序器"], owner: "外包维修-赵师傅", reviewer: "安全负责人-周经理", dueDays: 3 },
+      { id: "merchant-extinguisher", label: "商户灭火器", keywords: ["商户", "灭火器", "餐饮"], owner: "租户负责人-王店长", reviewer: "维保项目-李工", dueDays: 5 },
+      { id: "sprinkler-tenant", label: "喷淋遮挡/堆放", keywords: ["喷淋", "遮挡", "货物", "堆放"], owner: "仓储主管-刘主管", reviewer: "维保项目-李工", dueDays: 3 },
+      { id: "passage-property", label: "消防通道/疏散", keywords: ["通道", "疏散", "占用", "堵塞"], owner: "物业工程-陈工", reviewer: "安全负责人-周经理", dueDays: 2 }
+    ]
   }
 };
 
@@ -140,7 +146,13 @@ const projectTemplates = [
       assignmentRules: {
         fallbackOwner: "设备维修-孙工",
         fallbackReviewer: "安环负责人-吴工",
-        dueDays: 5
+        dueDays: 5,
+        keywordRules: [
+          { id: "factory-equipment", label: "设备/电气", keywords: ["设备", "电气", "配电", "电源", "照明"], owner: "设备维修-孙工", reviewer: "设备经理-郑经理", dueDays: 3 },
+          { id: "factory-warehouse", label: "仓储堆放/通道", keywords: ["仓储", "货物", "堆放", "通道", "遮挡"], owner: "仓储物流-李主管", reviewer: "安环负责人-吴工", dueDays: 2 },
+          { id: "factory-workshop-1", label: "一车间隐患", keywords: ["一车间", "1车间", "1号车间"], owner: "一车间-张主管", reviewer: "安环负责人-吴工", dueDays: 5 },
+          { id: "factory-workshop-2", label: "二车间隐患", keywords: ["二车间", "2车间", "2号车间"], owner: "二车间-钱主管", reviewer: "安环负责人-吴工", dueDays: 5 }
+        ]
       }
     }
   },
@@ -160,7 +172,13 @@ const projectTemplates = [
       assignmentRules: {
         fallbackOwner: "物业工程-陈工",
         fallbackReviewer: "物业经理-黄经理",
-        dueDays: 3
+        dueDays: 3,
+        keywordRules: [
+          { id: "merchant-extinguisher", label: "商户/餐饮灭火器", keywords: ["商户", "餐饮", "灭火器"], owner: "商户负责人-王店长", reviewer: "消防维保-李工", dueDays: 3 },
+          { id: "restaurant-merchant", label: "餐饮商户整改", keywords: ["厨房", "油烟", "燃气", "餐饮"], owner: "餐饮商户-刘店长", reviewer: "物业经理-黄经理", dueDays: 2 },
+          { id: "outsourced-door", label: "防火门/设施维修", keywords: ["防火门", "闭门器", "顺序器", "消防栓箱门"], owner: "外包维修-赵师傅", reviewer: "消防维保-李工", dueDays: 2 },
+          { id: "property-passage", label: "公共区通道/疏散", keywords: ["通道", "疏散", "大堂", "楼梯间"], owner: "物业工程-陈工", reviewer: "物业经理-黄经理", dueDays: 2 }
+        ]
       }
     }
   }
@@ -272,6 +290,7 @@ function normalizeNameList(values, includePending = false) {
 
 function normalizeProjectConfig(config = {}) {
   const assignmentRules = config.assignmentRules && typeof config.assignmentRules === "object" ? config.assignmentRules : {};
+  const keywordRules = Array.isArray(assignmentRules.keywordRules) ? assignmentRules.keywordRules : defaultProjectConfig.assignmentRules.keywordRules;
   return {
     schemaVersion: 2,
     templateId: String(config.templateId || defaultProjectConfig.templateId).trim(),
@@ -285,7 +304,17 @@ function normalizeProjectConfig(config = {}) {
     assignmentRules: {
       fallbackOwner: String(assignmentRules.fallbackOwner || config.fallbackOwner || defaultProjectConfig.assignmentRules.fallbackOwner).trim(),
       fallbackReviewer: String(assignmentRules.fallbackReviewer || config.fallbackReviewer || defaultProjectConfig.assignmentRules.fallbackReviewer).trim(),
-      dueDays: Number(assignmentRules.dueDays || config.dueDays || defaultProjectConfig.assignmentRules.dueDays)
+      dueDays: Number(assignmentRules.dueDays || config.dueDays || defaultProjectConfig.assignmentRules.dueDays),
+      keywordRules: keywordRules
+        .map((rule, index) => ({
+          id: String(rule.id || `rule-${index + 1}`).trim(),
+          label: String(rule.label || `规则 ${index + 1}`).trim(),
+          keywords: Array.isArray(rule.keywords) ? rule.keywords.map((keyword) => String(keyword).trim()).filter(Boolean) : [],
+          owner: String(rule.owner || assignmentRules.fallbackOwner || defaultProjectConfig.assignmentRules.fallbackOwner).trim(),
+          reviewer: String(rule.reviewer || assignmentRules.fallbackReviewer || defaultProjectConfig.assignmentRules.fallbackReviewer).trim(),
+          dueDays: Number(rule.dueDays || assignmentRules.dueDays || defaultProjectConfig.assignmentRules.dueDays)
+        }))
+        .filter((rule) => rule.keywords.length > 0 && rule.owner)
     }
   };
 }

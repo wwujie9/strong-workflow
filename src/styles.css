@@ -215,6 +215,32 @@ h1 {
   align-items: center;
 }
 
+.rule-list,
+.rule-hit-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rule-list span,
+.rule-hit-list span {
+  max-width: 100%;
+  padding: 5px 7px;
+  border-radius: 7px;
+  overflow: hidden;
+  color: #176256;
+  background: #edf9f5;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rule-hit-list span {
+  color: #5d4d16;
+  background: #fff8e3;
+}
+
 .onboarding-steps {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));

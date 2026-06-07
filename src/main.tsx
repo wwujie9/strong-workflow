@@ -119,7 +119,17 @@ type ProjectConfig = {
     fallbackOwner: string;
     fallbackReviewer: string;
     dueDays: number;
+    keywordRules?: AssignmentRule[];
   };
+};
+
+type AssignmentRule = {
+  id: string;
+  label: string;
+  keywords: string[];
+  owner: string;
+  reviewer?: string;
+  dueDays?: number;
 };
 
 type CsvImportState = {
@@ -157,6 +167,18 @@ type AssignmentSuggestion = {
   reviewer: string;
   due: string;
   reason: string;
+  matchedCount: number;
+  items: AssignmentSuggestionItem[];
+};
+
+type AssignmentSuggestionItem = {
+  id: string;
+  code: string;
+  title: string;
+  owner: string;
+  reviewer: string;
+  due: string;
+  ruleLabel: string;
 };
 
 type DrillRecord = {
@@ -201,7 +223,13 @@ const defaultProjectConfig: ProjectConfig = {
   assignmentRules: {
     fallbackOwner: "物业工程-陈工",
     fallbackReviewer: "安全负责人-周经理",
-    dueDays: 7
+    dueDays: 7,
+    keywordRules: [
+      { id: "door-outsourced", label: "防火门/闭门器", keywords: ["防火门", "闭门器", "顺序器"], owner: "外包维修-赵师傅", reviewer: "安全负责人-周经理", dueDays: 3 },
+      { id: "merchant-extinguisher", label: "商户灭火器", keywords: ["商户", "灭火器", "餐饮"], owner: "租户负责人-王店长", reviewer: "维保项目-李工", dueDays: 5 },
+      { id: "sprinkler-tenant", label: "喷淋遮挡/堆放", keywords: ["喷淋", "遮挡", "货物", "堆放"], owner: "仓储主管-刘主管", reviewer: "维保项目-李工", dueDays: 3 },
+      { id: "passage-property", label: "消防通道/疏散", keywords: ["通道", "疏散", "占用", "堵塞"], owner: "物业工程-陈工", reviewer: "安全负责人-周经理", dueDays: 2 }
+    ]
   }
 };
 
@@ -228,7 +256,13 @@ const projectTemplates: ProjectTemplate[] = [
       assignmentRules: {
         fallbackOwner: "设备维修-孙工",
         fallbackReviewer: "安环负责人-吴工",
-        dueDays: 5
+        dueDays: 5,
+        keywordRules: [
+          { id: "factory-equipment", label: "设备/电气", keywords: ["设备", "电气", "配电", "电源", "照明"], owner: "设备维修-孙工", reviewer: "设备经理-郑经理", dueDays: 3 },
+          { id: "factory-warehouse", label: "仓储堆放/通道", keywords: ["仓储", "货物", "堆放", "通道", "遮挡"], owner: "仓储物流-李主管", reviewer: "安环负责人-吴工", dueDays: 2 },
+          { id: "factory-workshop-1", label: "一车间隐患", keywords: ["一车间", "1车间", "1号车间"], owner: "一车间-张主管", reviewer: "安环负责人-吴工", dueDays: 5 },
+          { id: "factory-workshop-2", label: "二车间隐患", keywords: ["二车间", "2车间", "2号车间"], owner: "二车间-钱主管", reviewer: "安环负责人-吴工", dueDays: 5 }
+        ]
       }
     }
   },
@@ -248,7 +282,13 @@ const projectTemplates: ProjectTemplate[] = [
       assignmentRules: {
         fallbackOwner: "物业工程-陈工",
         fallbackReviewer: "物业经理-黄经理",
-        dueDays: 3
+        dueDays: 3,
+        keywordRules: [
+          { id: "merchant-extinguisher", label: "商户/餐饮灭火器", keywords: ["商户", "餐饮", "灭火器"], owner: "商户负责人-王店长", reviewer: "消防维保-李工", dueDays: 3 },
+          { id: "restaurant-merchant", label: "餐饮商户整改", keywords: ["厨房", "油烟", "燃气", "餐饮"], owner: "餐饮商户-刘店长", reviewer: "物业经理-黄经理", dueDays: 2 },
+          { id: "outsourced-door", label: "防火门/设施维修", keywords: ["防火门", "闭门器", "顺序器", "消防栓箱门"], owner: "外包维修-赵师傅", reviewer: "消防维保-李工", dueDays: 2 },
+          { id: "property-passage", label: "公共区通道/疏散", keywords: ["通道", "疏散", "大堂", "楼梯间"], owner: "物业工程-陈工", reviewer: "物业经理-黄经理", dueDays: 2 }
+        ]
       }
     }
   }
@@ -530,6 +570,7 @@ function normalizeNameList(values: string[] | string, includePending = false) {
 
 function normalizeProjectConfig(config: Partial<ProjectConfig>): ProjectConfig {
   const rules = config.assignmentRules || defaultProjectConfig.assignmentRules!;
+  const keywordRules = Array.isArray(rules.keywordRules) ? rules.keywordRules : defaultProjectConfig.assignmentRules!.keywordRules || [];
   return {
     ...defaultProjectConfig,
     ...config,
@@ -541,7 +582,15 @@ function normalizeProjectConfig(config: Partial<ProjectConfig>): ProjectConfig {
     assignmentRules: {
       fallbackOwner: rules.fallbackOwner || defaultProjectConfig.assignmentRules!.fallbackOwner,
       fallbackReviewer: rules.fallbackReviewer || defaultProjectConfig.assignmentRules!.fallbackReviewer,
-      dueDays: Number(rules.dueDays || defaultProjectConfig.assignmentRules!.dueDays)
+      dueDays: Number(rules.dueDays || defaultProjectConfig.assignmentRules!.dueDays),
+      keywordRules: keywordRules.map((rule, index) => ({
+        id: rule.id || `rule-${index + 1}`,
+        label: rule.label || `规则 ${index + 1}`,
+        keywords: Array.isArray(rule.keywords) ? rule.keywords.map((keyword) => String(keyword).trim()).filter(Boolean) : [],
+        owner: rule.owner || rules.fallbackOwner || defaultProjectConfig.assignmentRules!.fallbackOwner,
+        reviewer: rule.reviewer || rules.fallbackReviewer || defaultProjectConfig.assignmentRules!.fallbackReviewer,
+        dueDays: Number(rule.dueDays || rules.dueDays || defaultProjectConfig.assignmentRules!.dueDays)
+      })).filter((rule) => rule.keywords.length > 0 && rule.owner)
     }
   };
 }
@@ -556,6 +605,12 @@ function mostCommon(values: string[], fallback: string) {
   const counts = values.filter(Boolean).reduce<Record<string, number>>((acc, value) => ({ ...acc, [value]: (acc[value] || 0) + 1 }), {});
   const [winner] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || [];
   return winner || fallback;
+}
+
+function matchAssignmentRule(hazard: Pick<Hazard, "category" | "title" | "description" | "location">, config: ProjectConfig) {
+  const rules = config.assignmentRules?.keywordRules || [];
+  const text = `${hazard.category}${hazard.title}${hazard.description}${hazard.location}`.toLowerCase();
+  return rules.find((rule) => rule.keywords.some((keyword) => text.includes(keyword.toLowerCase())));
 }
 
 function splitCsvRows(text: string) {
@@ -714,7 +769,17 @@ function buildCsvImportState({
 
     const rowErrors = issues.some((issue) => issue.row === rowNumber && issue.level === "error");
     if (rowErrors) return;
-    const hazard = createHazardFromCsvRow(row, index, config, existingHazards.length, mapping);
+    const baseHazard = createHazardFromCsvRow(row, index, config, existingHazards.length, mapping);
+    const rule = !values.owner ? matchAssignmentRule(baseHazard, config) : undefined;
+    const hazard = rule
+      ? {
+          ...baseHazard,
+          owner: rule.owner,
+          reviewer: rule.reviewer || baseHazard.reviewer,
+          due: addDays(new Date().toISOString().slice(0, 10), rule.dueDays || config.assignmentRules?.dueDays || 7),
+          logs: [`按模板规则建议分派：${rule.label} -> ${rule.owner}`, ...baseHazard.logs]
+        }
+      : baseHazard;
     seenCodes.add(hazard.code);
     hazards.push(hazard);
   });
@@ -818,19 +883,34 @@ function App() {
   function buildAssignmentSuggestion(importedHazards: Hazard[]): AssignmentSuggestion {
     const fallbackOwner = projectConfig.assignmentRules?.fallbackOwner || ownerOptions.find((owner) => owner !== "待分派") || projectConfig.maintainerName;
     const fallbackReviewer = projectConfig.assignmentRules?.fallbackReviewer || reviewerOptions[0] || projectConfig.maintainerName;
-    const suggestedOwner = mostCommon(importedHazards.map((hazard) => (hazard.owner === "待分派" ? "" : hazard.owner)), fallbackOwner);
-    const suggestedReviewer = mostCommon(importedHazards.map((hazard) => hazard.reviewer), fallbackReviewer);
-    const suggestedDue = mostCommon(importedHazards.map((hazard) => hazard.due), projectConfig.defaultDue || addDays(new Date().toISOString().slice(0, 10), projectConfig.assignmentRules?.dueDays || 7));
+    const items = importedHazards.map((hazard) => {
+      const rule = matchAssignmentRule(hazard, projectConfig);
+      return {
+        id: hazard.id,
+        code: hazard.code,
+        title: hazard.title,
+        owner: hazard.owner === "待分派" ? rule?.owner || fallbackOwner : hazard.owner,
+        reviewer: rule?.reviewer || hazard.reviewer || fallbackReviewer,
+        due: hazard.due || addDays(new Date().toISOString().slice(0, 10), rule?.dueDays || projectConfig.assignmentRules?.dueDays || 7),
+        ruleLabel: rule?.label || "默认规则"
+      };
+    });
+    const suggestedOwner = mostCommon(items.map((item) => item.owner), fallbackOwner);
+    const suggestedReviewer = mostCommon(items.map((item) => item.reviewer), fallbackReviewer);
+    const suggestedDue = mostCommon(items.map((item) => item.due), projectConfig.defaultDue || addDays(new Date().toISOString().slice(0, 10), projectConfig.assignmentRules?.dueDays || 7));
+    const matchedCount = items.filter((item) => item.ruleLabel !== "默认规则").length;
     return {
       ids: importedHazards.map((hazard) => hazard.id),
       owner: suggestedOwner,
       reviewer: suggestedReviewer,
       due: suggestedDue,
-      reason: `基于本次导入 ${importedHazards.length} 条隐患的责任人/复核人出现频次和项目默认规则生成`
+      reason: `基于 ${matchedCount} 条规则命中和 ${importedHazards.length - matchedCount} 条默认规则生成`,
+      matchedCount,
+      items
     };
   }
 
-  function applyAssignmentSuggestion() {
+  async function applyAssignmentSuggestion() {
     if (!assignmentSuggestion) {
       setNotice("暂无可应用的批量分派建议。");
       return;
@@ -839,7 +919,28 @@ function App() {
     setBatchOwner(assignmentSuggestion.owner);
     setBatchReviewer(assignmentSuggestion.reviewer);
     setBatchDue(assignmentSuggestion.due);
-    setNotice(`已应用分派建议：选中 ${assignmentSuggestion.ids.length} 条，责任人 ${assignmentSuggestion.owner}，复核人 ${assignmentSuggestion.reviewer}。`);
+    for (const item of assignmentSuggestion.items) {
+      await runHazardAction(
+        item.id,
+        {
+          action: "assign",
+          owner: item.owner,
+          reviewer: item.reviewer,
+          due: item.due,
+          log: `按模板规则批量分派：${item.ruleLabel} -> ${item.owner}`
+        },
+        (hazard) => ({
+          ...hazard,
+          owner: item.owner,
+          reviewer: item.reviewer,
+          due: item.due,
+          status: "待整改",
+          updated: "刚刚",
+          logs: [`按模板规则批量分派：${item.ruleLabel} -> ${item.owner}`, ...hazard.logs]
+        })
+      );
+    }
+    setNotice(`已按模板规则分派 ${assignmentSuggestion.items.length} 条隐患，其中 ${assignmentSuggestion.matchedCount} 条命中关键词规则。`);
   }
 
   async function previewCsvImport(file: File) {
@@ -2130,6 +2231,11 @@ function CustomerOnboardingPanel({
             <span>{config.schemaVersion ? `配置包 v${config.schemaVersion}` : "兼容旧配置包"}</span>
           </div>
           <p>{activeTemplate.description}</p>
+          <div className="rule-list">
+            {(config.assignmentRules?.keywordRules || []).slice(0, 4).map((rule) => (
+              <span key={rule.id}>{rule.label} 到 {rule.owner}</span>
+            ))}
+          </div>
           <select value={config.templateId || activeTemplate.id} onChange={(event) => onApplyTemplate(event.target.value)}>
             {templates.map((template) => (
               <option key={template.id} value={template.id}>{template.name}</option>
@@ -2164,13 +2270,19 @@ function CustomerOnboardingPanel({
               <p>{assignmentSuggestion.reason}</p>
               <div className="suggestion-grid">
                 <span>隐患</span><strong>{assignmentSuggestion.ids.length} 条</strong>
+                <span>命中</span><strong>{assignmentSuggestion.matchedCount} 条</strong>
                 <span>责任人</span><strong>{assignmentSuggestion.owner}</strong>
                 <span>复核人</span><strong>{assignmentSuggestion.reviewer}</strong>
                 <span>期限</span><strong>{assignmentSuggestion.due}</strong>
               </div>
+              <div className="rule-hit-list">
+                {assignmentSuggestion.items.slice(0, 5).map((item) => (
+                  <span key={item.id}>{item.code} · {item.ruleLabel} · {item.owner}</span>
+                ))}
+              </div>
               <button onClick={onApplySuggestion}>
                 <UserRoundCheck size={16} />
-                应用到批量分派
+                按规则分派
               </button>
             </>
           ) : (
