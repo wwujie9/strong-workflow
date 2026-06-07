@@ -62,6 +62,30 @@ Docker API 健康检查
 integrations/existing-site-entry.html
 ```
 
+也可以直接生成客户专属入口页：
+
+```powershell
+npm run generate:integration -- --origin=https://xf-flow.example.com --hazard=real-001 --customer=青浦智造产业园
+npm run check:integration -- --file=dist-integrations/existing-site-entry.generated.html
+```
+
+Windows PowerShell 也可以用环境变量方式，适合客户名称含空格或特殊字符时使用：
+
+```powershell
+$env:WORKFLOW_ORIGIN='https://xf-flow.example.com'
+$env:WORKFLOW_HAZARD_ID='real-001'
+$env:WORKFLOW_CUSTOMER='青浦智造产业园'
+npm run generate:integration
+$env:INTEGRATION_SNIPPET_FILE='dist-integrations/existing-site-entry.generated.html'
+npm run check:integration
+```
+
+生成结果会放在：
+
+```text
+dist-integrations/existing-site-entry.generated.html
+```
+
 使用方法：
 
 1. 打开 [existing-site-entry.html](D:/1pro/strong-workflow/integrations/existing-site-entry.html)。

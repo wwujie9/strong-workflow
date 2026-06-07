@@ -208,6 +208,14 @@ npm run check:integration
 
 入口组件位于 [integrations/existing-site-entry.html](D:/1pro/strong-workflow/integrations/existing-site-entry.html)，可复制到客户现有官网、内部门户、CMS 页面或公众号菜单落地页，把 `data-workflow-origin` 改成公网 HTTPS 地址即可。
 
+生成客户专属现有站点入口页：
+
+```powershell
+npm run generate:integration -- --origin=https://xf-flow.example.com --hazard=real-001 --customer=青浦智造产业园
+```
+
+如果 Windows PowerShell 对中文参数传递不稳定，可使用 `WORKFLOW_ORIGIN`、`WORKFLOW_HAZARD_ID`、`WORKFLOW_CUSTOMER` 环境变量后执行 `npm run generate:integration`。
+
 ## 机器人配置
 
 企业微信：
