@@ -101,13 +101,70 @@ const initialHazards = [
 ];
 
 const defaultProjectConfig = {
+  schemaVersion: 2,
+  templateId: "industrial-park-fire",
+  industry: "园区/物业消防维保",
   customerName: "青浦智造产业园",
   projectName: "青浦智造产业园消防维保试点",
   maintainerName: "维保项目-李工",
   defaultDue: "2026-06-15",
   owners: ["待分派", "物业工程-陈工", "物业客服-沈主管", "外包维修-赵师傅", "租户负责人-王店长", "仓储主管-刘主管", "维保项目-李工"],
-  reviewers: ["安全负责人-周经理", "维保项目-李工", "园区安全-林主管", "物业经理-黄经理"]
+  reviewers: ["安全负责人-周经理", "维保项目-李工", "园区安全-林主管", "物业经理-黄经理"],
+  assignmentRules: {
+    fallbackOwner: "物业工程-陈工",
+    fallbackReviewer: "安全负责人-周经理",
+    dueDays: 7
+  }
 };
+
+const projectTemplates = [
+  {
+    id: "industrial-park-fire",
+    name: "园区/物业消防维保",
+    description: "适合园区、商业综合体、物业项目，责任人按物业工程、客服、租户、外包维修拆分。",
+    config: defaultProjectConfig
+  },
+  {
+    id: "factory-maintenance",
+    name: "制造工厂 EHS 隐患整改",
+    description: "适合工厂 EHS、设备维保、安环检查，强调车间负责人和安环复核。",
+    config: {
+      ...defaultProjectConfig,
+      templateId: "factory-maintenance",
+      industry: "制造工厂 EHS",
+      customerName: "华东精密制造工厂",
+      projectName: "华东精密制造工厂 EHS 隐患整改试点",
+      maintainerName: "安环负责人-吴工",
+      owners: ["待分派", "一车间-张主管", "二车间-钱主管", "设备维修-孙工", "仓储物流-李主管", "外包维修-赵师傅"],
+      reviewers: ["安环负责人-吴工", "厂务经理-周经理", "设备经理-郑经理"],
+      assignmentRules: {
+        fallbackOwner: "设备维修-孙工",
+        fallbackReviewer: "安环负责人-吴工",
+        dueDays: 5
+      }
+    }
+  },
+  {
+    id: "property-merchant",
+    name: "商业物业/商户整改",
+    description: "适合商场、餐饮街区、写字楼，强调商户负责人和物业经理复核。",
+    config: {
+      ...defaultProjectConfig,
+      templateId: "property-merchant",
+      industry: "商业物业/商户整改",
+      customerName: "南城商业综合体",
+      projectName: "南城商业综合体消防整改闭环试点",
+      maintainerName: "消防维保-李工",
+      owners: ["待分派", "物业工程-陈工", "物业客服-沈主管", "商户负责人-王店长", "餐饮商户-刘店长", "外包维修-赵师傅"],
+      reviewers: ["物业经理-黄经理", "安全负责人-周经理", "消防维保-李工"],
+      assignmentRules: {
+        fallbackOwner: "物业工程-陈工",
+        fallbackReviewer: "物业经理-黄经理",
+        dueDays: 3
+      }
+    }
+  }
+];
 
 function createPilotHazards() {
   const templates = [
@@ -214,13 +271,22 @@ function normalizeNameList(values, includePending = false) {
 }
 
 function normalizeProjectConfig(config = {}) {
+  const assignmentRules = config.assignmentRules && typeof config.assignmentRules === "object" ? config.assignmentRules : {};
   return {
+    schemaVersion: 2,
+    templateId: String(config.templateId || defaultProjectConfig.templateId).trim(),
+    industry: String(config.industry || defaultProjectConfig.industry).trim(),
     customerName: String(config.customerName || defaultProjectConfig.customerName).trim(),
     projectName: String(config.projectName || defaultProjectConfig.projectName).trim(),
     maintainerName: String(config.maintainerName || defaultProjectConfig.maintainerName).trim(),
     defaultDue: String(config.defaultDue || defaultProjectConfig.defaultDue).trim(),
     owners: normalizeNameList(config.owners || defaultProjectConfig.owners, true),
-    reviewers: normalizeNameList(config.reviewers || defaultProjectConfig.reviewers)
+    reviewers: normalizeNameList(config.reviewers || defaultProjectConfig.reviewers),
+    assignmentRules: {
+      fallbackOwner: String(assignmentRules.fallbackOwner || config.fallbackOwner || defaultProjectConfig.assignmentRules.fallbackOwner).trim(),
+      fallbackReviewer: String(assignmentRules.fallbackReviewer || config.fallbackReviewer || defaultProjectConfig.assignmentRules.fallbackReviewer).trim(),
+      dueDays: Number(assignmentRules.dueDays || config.dueDays || defaultProjectConfig.assignmentRules.dueDays)
+    }
   };
 }
 
@@ -691,6 +757,13 @@ app.get("/api/project-config", async (_req, res) => {
   res.json(await readProjectConfig());
 });
 
+app.get("/api/project-templates", (_req, res) => {
+  res.json(projectTemplates.map((template) => ({
+    ...template,
+    config: normalizeProjectConfig(template.config)
+  })));
+});
+
 app.put("/api/project-config", async (req, res) => {
   if (!isValidProjectConfig(req.body)) {
     res.status(400).json({ ok: false, error: "invalid project config" });
@@ -704,14 +777,14 @@ app.get("/api/project-config/export", async (_req, res) => {
   const config = await readProjectConfig();
   res.json({
     kind: "strong-workflow.project-config",
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     config
   });
 });
 
 app.post("/api/project-config/import", async (req, res) => {
-  const config = req.body?.config || req.body;
+  const config = req.body?.config || req.body?.projectConfig || req.body;
   if (!isValidProjectConfig(config)) {
     res.status(400).json({ ok: false, error: "invalid project config package" });
     return;

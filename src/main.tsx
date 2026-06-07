@@ -106,12 +106,20 @@ type NotificationSummary = {
 };
 
 type ProjectConfig = {
+  schemaVersion?: number;
+  templateId?: string;
+  industry?: string;
   customerName: string;
   projectName: string;
   maintainerName: string;
   defaultDue: string;
   owners: string[];
   reviewers: string[];
+  assignmentRules?: {
+    fallbackOwner: string;
+    fallbackReviewer: string;
+    dueDays: number;
+  };
 };
 
 type CsvImportState = {
@@ -136,6 +144,36 @@ type CsvValidationIssue = {
   level: "error" | "warning";
 };
 
+type ProjectTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  config: ProjectConfig;
+};
+
+type AssignmentSuggestion = {
+  ids: string[];
+  owner: string;
+  reviewer: string;
+  due: string;
+  reason: string;
+};
+
+type DrillRecord = {
+  id: string;
+  at: string;
+  customerName: string;
+  projectName: string;
+  templateName: string;
+  fileName: string;
+  importedCount: number;
+  blockingCount: number;
+  warningCount: number;
+  suggestedOwner: string;
+  suggestedReviewer: string;
+  suggestedDue: string;
+};
+
 const API_BASE = (import.meta.env.VITE_API_BASE || (window.location.port === "5173" ? "http://127.0.0.1:5174/api" : "/api")).replace(/\/$/, "");
 const PUBLIC_BASE = API_BASE.startsWith("http") ? API_BASE.replace(/\/api$/, "") : window.location.origin;
 
@@ -151,13 +189,70 @@ const statusTone: Record<Status, string> = {
 };
 
 const defaultProjectConfig: ProjectConfig = {
+  schemaVersion: 2,
+  templateId: "industrial-park-fire",
+  industry: "园区/物业消防维保",
   customerName: "青浦智造产业园",
   projectName: "青浦智造产业园消防维保试点",
   maintainerName: "维保项目-李工",
   defaultDue: "2026-06-15",
   owners: ["待分派", "物业工程-陈工", "物业客服-沈主管", "外包维修-赵师傅", "租户负责人-王店长", "仓储主管-刘主管", "维保项目-李工"],
-  reviewers: ["安全负责人-周经理", "维保项目-李工", "园区安全-林主管", "物业经理-黄经理"]
+  reviewers: ["安全负责人-周经理", "维保项目-李工", "园区安全-林主管", "物业经理-黄经理"],
+  assignmentRules: {
+    fallbackOwner: "物业工程-陈工",
+    fallbackReviewer: "安全负责人-周经理",
+    dueDays: 7
+  }
 };
+
+const projectTemplates: ProjectTemplate[] = [
+  {
+    id: "industrial-park-fire",
+    name: "园区/物业消防维保",
+    description: "园区、商业综合体、物业项目，按物业工程、客服、租户、外包维修拆分。",
+    config: defaultProjectConfig
+  },
+  {
+    id: "factory-maintenance",
+    name: "制造工厂 EHS 隐患整改",
+    description: "工厂 EHS、设备维保、安环检查，按车间、设备、仓储和安环复核拆分。",
+    config: {
+      ...defaultProjectConfig,
+      templateId: "factory-maintenance",
+      industry: "制造工厂 EHS",
+      customerName: "华东精密制造工厂",
+      projectName: "华东精密制造工厂 EHS 隐患整改试点",
+      maintainerName: "安环负责人-吴工",
+      owners: ["待分派", "一车间-张主管", "二车间-钱主管", "设备维修-孙工", "仓储物流-李主管", "外包维修-赵师傅"],
+      reviewers: ["安环负责人-吴工", "厂务经理-周经理", "设备经理-郑经理"],
+      assignmentRules: {
+        fallbackOwner: "设备维修-孙工",
+        fallbackReviewer: "安环负责人-吴工",
+        dueDays: 5
+      }
+    }
+  },
+  {
+    id: "property-merchant",
+    name: "商业物业/商户整改",
+    description: "商场、餐饮街区、写字楼，按物业、商户、外包维修和物业经理复核拆分。",
+    config: {
+      ...defaultProjectConfig,
+      templateId: "property-merchant",
+      industry: "商业物业/商户整改",
+      customerName: "南城商业综合体",
+      projectName: "南城商业综合体消防整改闭环试点",
+      maintainerName: "消防维保-李工",
+      owners: ["待分派", "物业工程-陈工", "物业客服-沈主管", "商户负责人-王店长", "餐饮商户-刘店长", "外包维修-赵师傅"],
+      reviewers: ["物业经理-黄经理", "安全负责人-周经理", "消防维保-李工"],
+      assignmentRules: {
+        fallbackOwner: "物业工程-陈工",
+        fallbackReviewer: "物业经理-黄经理",
+        dueDays: 3
+      }
+    }
+  }
+];
 
 const csvFieldLabels: Record<CsvFieldKey, string> = {
   code: "编号",
@@ -394,12 +489,7 @@ function useStoredProjectConfig() {
     if (!cached) return defaultProjectConfig;
     try {
       const parsed = JSON.parse(cached) as Partial<ProjectConfig>;
-      return {
-        ...defaultProjectConfig,
-        ...parsed,
-        owners: normalizeNameList(parsed.owners || defaultProjectConfig.owners, true),
-        reviewers: normalizeNameList(parsed.reviewers || defaultProjectConfig.reviewers)
-      };
+      return normalizeProjectConfig(parsed);
     } catch {
       return defaultProjectConfig;
     }
@@ -410,12 +500,7 @@ function useStoredProjectConfig() {
     fetch(`${API_BASE}/project-config`)
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error("config unavailable"))))
       .then((remoteConfig: ProjectConfig) => {
-        setConfig({
-          ...defaultProjectConfig,
-          ...remoteConfig,
-          owners: normalizeNameList(remoteConfig.owners || defaultProjectConfig.owners, true),
-          reviewers: normalizeNameList(remoteConfig.reviewers || defaultProjectConfig.reviewers)
-        });
+        setConfig(normalizeProjectConfig(remoteConfig));
         apiLoaded.current = true;
       })
       .catch(() => {
@@ -441,6 +526,36 @@ function normalizeNameList(values: string[] | string, includePending = false) {
   const cleaned = source.map((value) => value.trim()).filter(Boolean);
   const list = includePending ? ["待分派", ...cleaned] : cleaned;
   return Array.from(new Set(list));
+}
+
+function normalizeProjectConfig(config: Partial<ProjectConfig>): ProjectConfig {
+  const rules = config.assignmentRules || defaultProjectConfig.assignmentRules!;
+  return {
+    ...defaultProjectConfig,
+    ...config,
+    schemaVersion: 2,
+    templateId: config.templateId || defaultProjectConfig.templateId,
+    industry: config.industry || defaultProjectConfig.industry,
+    owners: normalizeNameList(config.owners || defaultProjectConfig.owners, true),
+    reviewers: normalizeNameList(config.reviewers || defaultProjectConfig.reviewers),
+    assignmentRules: {
+      fallbackOwner: rules.fallbackOwner || defaultProjectConfig.assignmentRules!.fallbackOwner,
+      fallbackReviewer: rules.fallbackReviewer || defaultProjectConfig.assignmentRules!.fallbackReviewer,
+      dueDays: Number(rules.dueDays || defaultProjectConfig.assignmentRules!.dueDays)
+    }
+  };
+}
+
+function addDays(dateText: string, days: number) {
+  const base = isValidDateText(dateText) ? new Date(`${dateText}T00:00:00+08:00`) : new Date();
+  base.setDate(base.getDate() + days);
+  return base.toISOString().slice(0, 10);
+}
+
+function mostCommon(values: string[], fallback: string) {
+  const counts = values.filter(Boolean).reduce<Record<string, number>>((acc, value) => ({ ...acc, [value]: (acc[value] || 0) + 1 }), {});
+  const [winner] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || [];
+  return winner || fallback;
 }
 
 function splitCsvRows(text: string) {
@@ -634,6 +749,8 @@ function App() {
   const [batchDue, setBatchDue] = useState(defaultProjectConfig.defaultDue);
   const [csvImport, setCsvImport] = useState<CsvImportState | null>(null);
   const [csvRows, setCsvRows] = useState<Record<string, string>[]>([]);
+  const [assignmentSuggestion, setAssignmentSuggestion] = useState<AssignmentSuggestion | null>(null);
+  const [drillRecord, setDrillRecord] = useState<DrillRecord | null>(null);
   const [route, setRoute] = useState<RouteState>(() => parseRoute());
 
   const ownerOptions = useMemo(() => normalizeNameList(projectConfig.owners, true), [projectConfig.owners]);
@@ -682,6 +799,48 @@ function App() {
     if (!reviewerOptions.includes(batchReviewer)) setBatchReviewer(reviewerOptions[0] || projectConfig.maintainerName);
     if (projectConfig.defaultDue && batchDue !== projectConfig.defaultDue) setBatchDue(projectConfig.defaultDue);
   }, [ownerOptions, reviewerOptions, projectConfig.defaultDue, projectConfig.maintainerName]);
+
+  function currentTemplateName(config = projectConfig) {
+    return projectTemplates.find((template) => template.id === config.templateId)?.name || config.industry || "自定义客户模板";
+  }
+
+  function applyProjectTemplate(templateId: string) {
+    const template = projectTemplates.find((item) => item.id === templateId);
+    if (!template) return;
+    const nextConfig = normalizeProjectConfig(template.config);
+    setProjectConfig(nextConfig);
+    setBatchOwner(nextConfig.assignmentRules?.fallbackOwner || nextConfig.owners.find((owner) => owner !== "待分派") || "待分派");
+    setBatchReviewer(nextConfig.assignmentRules?.fallbackReviewer || nextConfig.reviewers[0] || nextConfig.maintainerName);
+    setBatchDue(nextConfig.defaultDue);
+    setNotice(`已套用客户模板：${template.name}。请按真实客户修改项目名称和人员名单。`);
+  }
+
+  function buildAssignmentSuggestion(importedHazards: Hazard[]): AssignmentSuggestion {
+    const fallbackOwner = projectConfig.assignmentRules?.fallbackOwner || ownerOptions.find((owner) => owner !== "待分派") || projectConfig.maintainerName;
+    const fallbackReviewer = projectConfig.assignmentRules?.fallbackReviewer || reviewerOptions[0] || projectConfig.maintainerName;
+    const suggestedOwner = mostCommon(importedHazards.map((hazard) => (hazard.owner === "待分派" ? "" : hazard.owner)), fallbackOwner);
+    const suggestedReviewer = mostCommon(importedHazards.map((hazard) => hazard.reviewer), fallbackReviewer);
+    const suggestedDue = mostCommon(importedHazards.map((hazard) => hazard.due), projectConfig.defaultDue || addDays(new Date().toISOString().slice(0, 10), projectConfig.assignmentRules?.dueDays || 7));
+    return {
+      ids: importedHazards.map((hazard) => hazard.id),
+      owner: suggestedOwner,
+      reviewer: suggestedReviewer,
+      due: suggestedDue,
+      reason: `基于本次导入 ${importedHazards.length} 条隐患的责任人/复核人出现频次和项目默认规则生成`
+    };
+  }
+
+  function applyAssignmentSuggestion() {
+    if (!assignmentSuggestion) {
+      setNotice("暂无可应用的批量分派建议。");
+      return;
+    }
+    setBatchIds(assignmentSuggestion.ids);
+    setBatchOwner(assignmentSuggestion.owner);
+    setBatchReviewer(assignmentSuggestion.reviewer);
+    setBatchDue(assignmentSuggestion.due);
+    setNotice(`已应用分派建议：选中 ${assignmentSuggestion.ids.length} 条，责任人 ${assignmentSuggestion.owner}，复核人 ${assignmentSuggestion.reviewer}。`);
+  }
 
   async function previewCsvImport(file: File) {
     try {
@@ -762,13 +921,34 @@ function App() {
       setNotice(`CSV 仍有 ${csvImport.invalidRows.length} 个阻断问题，请先修正字段映射或源文件。`);
       return;
     }
+    const importedHazards = csvImport.hazards;
+    const suggestion = buildAssignmentSuggestion(importedHazards);
     const nextHazards = mode === "replace" ? csvImport.hazards : [...csvImport.hazards, ...hazards];
     void saveHazardsBulk(nextHazards, "CSV 导入保存失败");
-    setSelectedId(csvImport.hazards[0].id);
+    setSelectedId(importedHazards[0].id);
+    setBatchIds(suggestion.ids);
+    setBatchOwner(suggestion.owner);
+    setBatchReviewer(suggestion.reviewer);
+    setBatchDue(suggestion.due);
+    setAssignmentSuggestion(suggestion);
+    setDrillRecord({
+      id: `drill-${Date.now()}`,
+      at: todayText(),
+      customerName: projectConfig.customerName,
+      projectName: projectConfig.projectName,
+      templateName: currentTemplateName(),
+      fileName: csvImport.fileName,
+      importedCount: importedHazards.length,
+      blockingCount: csvImport.issues.filter((issue) => issue.level === "error").length,
+      warningCount: csvImport.issues.filter((issue) => issue.level === "warning").length,
+      suggestedOwner: suggestion.owner,
+      suggestedReviewer: suggestion.reviewer,
+      suggestedDue: suggestion.due
+    });
     appendRobotMessage(
-      `已${mode === "replace" ? "替换为" : "追加"} ${csvImport.hazards.length} 条 CSV 隐患，默认项目：${projectConfig.projectName}。`
+      `已${mode === "replace" ? "替换为" : "追加"} ${importedHazards.length} 条 CSV 隐患，已生成批量分派建议和导入演练记录。`
     );
-    setNotice(`CSV 导入完成：${csvImport.hazards.length} 条隐患已进入工作流。`);
+    setNotice(`CSV 导入完成：${importedHazards.length} 条隐患已进入工作流，并已选中用于批量分派。`);
     setCsvImport(null);
     setCsvRows([]);
   }
@@ -808,7 +988,7 @@ function App() {
       const response = await fetch(`${API_BASE}/project-config/export`);
       const payload = response.ok
         ? await response.json()
-        : { kind: "strong-workflow.project-config", version: 1, exportedAt: new Date().toISOString(), config: projectConfig };
+        : { kind: "strong-workflow.project-config", version: 2, exportedAt: new Date().toISOString(), config: normalizeProjectConfig(projectConfig) };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
@@ -835,16 +1015,54 @@ function App() {
       });
       const result = (await response.json()) as { config?: ProjectConfig; error?: string };
       if (!response.ok || !result.config) throw new Error(result.error || "config import failed");
-      setProjectConfig({
-        ...defaultProjectConfig,
-        ...result.config,
-        owners: normalizeNameList(result.config.owners || defaultProjectConfig.owners, true),
-        reviewers: normalizeNameList(result.config.reviewers || defaultProjectConfig.reviewers)
-      });
+      setProjectConfig(normalizeProjectConfig(result.config));
       setNotice(`已导入项目配置：${result.config.projectName}`);
     } catch {
       setNotice("配置导入失败，请确认 JSON 包格式正确，且默认期限为 YYYY-MM-DD。");
     }
+  }
+
+  function exportDrillRecord() {
+    if (!drillRecord) {
+      setNotice("暂无导入演练记录，请先完成一次 CSV 导入。");
+      return;
+    }
+    const markdown = [
+      "# 导入演练记录",
+      "",
+      `- 演练编号：${drillRecord.id}`,
+      `- 生成时间：${drillRecord.at}`,
+      `- 客户名称：${drillRecord.customerName}`,
+      `- 项目名称：${drillRecord.projectName}`,
+      `- 客户模板：${drillRecord.templateName}`,
+      `- CSV 文件：${drillRecord.fileName}`,
+      `- 成功导入：${drillRecord.importedCount} 条`,
+      `- 阻断问题：${drillRecord.blockingCount} 个`,
+      `- 提醒问题：${drillRecord.warningCount} 个`,
+      `- 建议责任人：${drillRecord.suggestedOwner}`,
+      `- 建议复核人：${drillRecord.suggestedReviewer}`,
+      `- 建议期限：${drillRecord.suggestedDue}`,
+      "",
+      "## 现场复核项",
+      "",
+      "- [ ] 客户配置已确认",
+      "- [ ] CSV 字段映射已确认",
+      "- [ ] 阻断问题已清零",
+      "- [ ] 批量分派建议已确认",
+      "- [ ] 整改链接可复制并发送",
+      "- [ ] 复核链接可复制并发送",
+      "- [ ] PDF 闭环包可导出"
+    ].join("\n");
+    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${drillRecord.customerName}-导入演练记录.md`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 300);
+    setNotice("导入演练记录已生成，可作为客户试点交付附件。");
   }
 
   if (!selected) {
@@ -1483,6 +1701,17 @@ function App() {
 
       <ConfigPanel health={health} onRefresh={refreshHealth} onRunReminder={runAutoReminder} />
 
+      <CustomerOnboardingPanel
+        assignmentSuggestion={assignmentSuggestion}
+        config={projectConfig}
+        drillRecord={drillRecord}
+        onApplySuggestion={applyAssignmentSuggestion}
+        onApplyTemplate={applyProjectTemplate}
+        onDownloadCsvTemplate={downloadCsvTemplate}
+        onExportDrillRecord={exportDrillRecord}
+        templates={projectTemplates}
+      />
+
       <ProjectSetupPanel config={projectConfig} onChange={setProjectConfig} onExport={exportProjectConfig} onImport={importProjectConfig} />
       <CsvImportPanel
         importState={csvImport}
@@ -1854,6 +2083,118 @@ function PortalView({
         </section>
       </section>
     </main>
+  );
+}
+
+function CustomerOnboardingPanel({
+  assignmentSuggestion,
+  config,
+  drillRecord,
+  onApplySuggestion,
+  onApplyTemplate,
+  onDownloadCsvTemplate,
+  onExportDrillRecord,
+  templates
+}: {
+  assignmentSuggestion: AssignmentSuggestion | null;
+  config: ProjectConfig;
+  drillRecord: DrillRecord | null;
+  onApplySuggestion: () => void;
+  onApplyTemplate: (templateId: string) => void;
+  onDownloadCsvTemplate: () => void;
+  onExportDrillRecord: () => void;
+  templates: ProjectTemplate[];
+}) {
+  const activeTemplate = templates.find((template) => template.id === config.templateId) || templates[0];
+  const checklist = [
+    { label: "客户模板", done: Boolean(config.templateId) },
+    { label: "项目配置", done: Boolean(config.customerName && config.projectName && config.owners.length > 1 && config.reviewers.length > 0) },
+    { label: "CSV导入", done: Boolean(assignmentSuggestion || drillRecord) },
+    { label: "批量分派", done: Boolean(assignmentSuggestion) },
+    { label: "演练记录", done: Boolean(drillRecord) }
+  ];
+
+  return (
+    <section className="panel onboarding-panel">
+      <div className="panel-head tight">
+        <div>
+          <h2>客户初始化向导</h2>
+          <p>从客户模板、配置复用、CSV 导入到批量分派建议，按试点交付顺序走</p>
+        </div>
+        <ShieldCheck size={20} />
+      </div>
+      <div className="onboarding-grid">
+        <div className="template-library">
+          <div className="template-head">
+            <strong>{activeTemplate.name}</strong>
+            <span>{config.schemaVersion ? `配置包 v${config.schemaVersion}` : "兼容旧配置包"}</span>
+          </div>
+          <p>{activeTemplate.description}</p>
+          <select value={config.templateId || activeTemplate.id} onChange={(event) => onApplyTemplate(event.target.value)}>
+            {templates.map((template) => (
+              <option key={template.id} value={template.id}>{template.name}</option>
+            ))}
+          </select>
+          <div className="template-actions">
+            <button className="ghost compact" onClick={onDownloadCsvTemplate}>
+              <FileDown size={16} />
+              CSV模板
+            </button>
+            <button className="ghost compact" onClick={onExportDrillRecord}>
+              <FileArchive size={16} />
+              演练记录
+            </button>
+          </div>
+        </div>
+
+        <div className="onboarding-steps">
+          {checklist.map((item, index) => (
+            <div className={`onboarding-step ${item.done ? "done" : ""}`} key={item.label}>
+              <span>{index + 1}</span>
+              <strong>{item.label}</strong>
+              <small>{item.done ? "已就绪" : "待完成"}</small>
+            </div>
+          ))}
+        </div>
+
+        <div className="suggestion-card">
+          <strong>导入后分派建议</strong>
+          {assignmentSuggestion ? (
+            <>
+              <p>{assignmentSuggestion.reason}</p>
+              <div className="suggestion-grid">
+                <span>隐患</span><strong>{assignmentSuggestion.ids.length} 条</strong>
+                <span>责任人</span><strong>{assignmentSuggestion.owner}</strong>
+                <span>复核人</span><strong>{assignmentSuggestion.reviewer}</strong>
+                <span>期限</span><strong>{assignmentSuggestion.due}</strong>
+              </div>
+              <button onClick={onApplySuggestion}>
+                <UserRoundCheck size={16} />
+                应用到批量分派
+              </button>
+            </>
+          ) : (
+            <p>完成 CSV 导入后，系统会按导入数据和项目默认规则自动生成建议。</p>
+          )}
+        </div>
+
+        <div className="drill-card">
+          <strong>导入演练记录</strong>
+          {drillRecord ? (
+            <>
+              <p>{drillRecord.at} · {drillRecord.fileName}</p>
+              <div className="suggestion-grid">
+                <span>导入</span><strong>{drillRecord.importedCount} 条</strong>
+                <span>阻断</span><strong>{drillRecord.blockingCount} 个</strong>
+                <span>提醒</span><strong>{drillRecord.warningCount} 个</strong>
+              </div>
+            </>
+          ) : (
+            <p>CSV 确认导入后自动生成，可下载给客户作为试点过程附件。</p>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
