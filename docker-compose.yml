@@ -1,0 +1,21 @@
+services:
+  strong-workflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: strong-workflow:local
+    container_name: strong-workflow
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    ports:
+      - "${HOST_PORT:-5174}:5174"
+    volumes:
+      - ./data:/app/data
+      - ./server/uploads:/app/server/uploads
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5174/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

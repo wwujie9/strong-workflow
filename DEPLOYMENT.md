@@ -63,7 +63,75 @@ npm run server
 powershell -ExecutionPolicy Bypass -File scripts\health-check.ps1
 ```
 
-## 4. PM2 启动
+## 4. Docker Compose 启动
+
+适合本地 Docker Desktop、测试服务器和后续标准化部署。生产镜像使用单容器模式：Express 提供 API 和前端静态产物，`data/` 与 `server/uploads/` 挂载到宿主机，方便备份和迁移。
+
+首次启动：
+
+```powershell
+cd D:\1pro\strong-workflow
+Copy-Item .env.docker.example .env.docker
+powershell -ExecutionPolicy Bypass -File scripts\docker-up.ps1 -Build
+```
+
+也可以直接用 Compose：
+
+```powershell
+docker compose up -d --build
+```
+
+访问：
+
+```text
+http://127.0.0.1:5174
+http://127.0.0.1:5174/api/health
+```
+
+查看容器：
+
+```powershell
+docker compose ps
+docker compose logs -f strong-workflow
+```
+
+停止：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\docker-down.ps1
+```
+
+健康检查：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\docker-health.ps1
+```
+
+Docker 运行时关键配置在 `.env.docker`：
+
+```text
+PUBLIC_BASE_URL=http://127.0.0.1:5174
+DATA_FILE=/app/data/hazards.json
+NOTIFICATION_FILE=/app/data/notifications.json
+UPLOAD_DIR=/app/server/uploads
+ALLOWED_ORIGINS=http://127.0.0.1:5174,http://localhost:5174
+```
+
+如果要绑定其他宿主机端口：
+
+```powershell
+$env:HOST_PORT='8080'
+docker compose up -d
+```
+
+此时 `.env.docker` 里的 `PUBLIC_BASE_URL` 也应改成：
+
+```text
+PUBLIC_BASE_URL=http://127.0.0.1:8080
+ALLOWED_ORIGINS=http://127.0.0.1:8080,http://localhost:8080
+```
+
+## 5. PM2 启动
 
 适合试点服务器已经安装 Node 运维工具的场景。
 
@@ -102,7 +170,7 @@ pm2-startup install
 pm2 save
 ```
 
-## 5. Windows 服务启动
+## 6. Windows 服务启动
 
 适合客户服务器要求“服务化运行”的场景。推荐使用 NSSM。
 
@@ -148,9 +216,15 @@ Stop-Service StrongWorkflow
 C:\tools\nssm\nssm.exe remove StrongWorkflow confirm
 ```
 
-## 6. 公网路径 A：Nginx / 宝塔反向代理
+## 7. 公网路径 A：Nginx / 宝塔反向代理
 
 Node 保持监听本地：
+
+```text
+http://127.0.0.1:5174
+```
+
+如果使用 Docker Compose，Nginx 仍然反代宿主机端口：
 
 ```text
 http://127.0.0.1:5174
@@ -186,7 +260,7 @@ https://xf-flow.example.com
 https://xf-flow.example.com/api/health
 ```
 
-## 7. 公网路径 B：Cloudflare Tunnel
+## 8. 公网路径 B：Cloudflare Tunnel
 
 适合客户服务器没有公网 IP，或不方便开放入站端口的场景。
 
@@ -228,7 +302,7 @@ PUBLIC_BASE_URL=https://xf-flow.example.com
 ALLOWED_ORIGINS=https://xf-flow.example.com,http://127.0.0.1:5173,http://localhost:5173
 ```
 
-## 8. 公网路径 C：Node 直接 HTTPS
+## 9. 公网路径 C：Node 直接 HTTPS
 
 仅建议在没有反向代理、且证书路径和 443 端口都能由 Node 控制时使用。
 
@@ -257,7 +331,66 @@ npm run server
 不建议在同一台机器上同时让 Nginx 和 Node 占用 443。
 ```
 
-## 9. 上线前必查
+## 10. CI/CD 自动化构建
+
+完整 CI/CD 说明见 [CI_CD.md](D:/1pro/strong-workflow/CI_CD.md)。
+
+仓库已提供 GitHub Actions：
+
+```text
+.github/workflows/ci-cd.yml
+```
+
+触发条件：
+
+```text
+push 到 main
+push 到 v2/rapid-iteration
+创建 v* tag
+pull_request
+手动 workflow_dispatch
+```
+
+流水线内容：
+
+```text
+npm ci
+npm run build
+docker build
+非 PR 时推送镜像到 GHCR：ghcr.io/wwujie9/strong-workflow
+```
+
+推荐发布方式：
+
+```powershell
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+服务器拉取新镜像后更新：
+
+```powershell
+docker compose pull
+docker compose up -d
+docker compose ps
+```
+
+如果当前使用本地源码构建，不依赖 GHCR：
+
+```powershell
+git pull
+docker compose up -d --build
+```
+
+如果使用 GHCR 镜像部署：
+
+```powershell
+$env:APP_VERSION='v0.2.0'
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+## 11. 上线前必查
 
 ```powershell
 npm run build
@@ -277,7 +410,7 @@ PDF 闭环包可以打开并另存为 PDF
 备份 zip 能生成
 ```
 
-## 10. 日常运维
+## 12. 日常运维
 
 每天检查：
 

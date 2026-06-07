@@ -8,6 +8,7 @@
 
 ```text
 DEPLOYMENT.md：Windows 服务 / PM2 / Nginx / Cloudflare Tunnel / Node HTTPS 部署说明
+CI_CD.md：Docker Compose 与 GitHub Actions 自动化构建/镜像发布流程
 ROBOT_INTEGRATION_RECORD.md：真实企业微信/钉钉机器人联调记录
 PILOT_DRILL_RECORD.md：30 条隐患端到端试点演练记录
 samples/customer-hazards-template.csv：真实客户 CSV 模板样例，含 30 条隐患

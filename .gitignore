@@ -2,8 +2,11 @@ node_modules/
 dist/
 .env
 .env.local
+.env.docker
 *.log
 server/*.log
 server/uploads-test.txt
 server/uploads/
 data/*.tmp
+data/notifications.json
+backups/
