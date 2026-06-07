@@ -286,12 +286,6 @@ function useStoredHazards() {
 
   useEffect(() => {
     window.localStorage.setItem("fire-closure-hazards", JSON.stringify(hazards));
-    if (!apiLoaded.current) return;
-    fetch(`${API_BASE}/hazards`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(hazards)
-    }).catch(() => undefined);
   }, [hazards]);
 
   return [hazards, setHazards] as const;
@@ -518,7 +512,8 @@ function App() {
       setNotice("没有可导入的隐患数据。");
       return;
     }
-    setHazards((current) => (mode === "replace" ? csvImport.hazards : [...csvImport.hazards, ...current]));
+    const nextHazards = mode === "replace" ? csvImport.hazards : [...csvImport.hazards, ...hazards];
+    void saveHazardsBulk(nextHazards, "CSV 导入保存失败");
     setSelectedId(csvImport.hazards[0].id);
     appendRobotMessage(
       `已${mode === "replace" ? "替换为" : "追加"} ${csvImport.hazards.length} 条 CSV 隐患，默认项目：${projectConfig.projectName}。`
@@ -584,6 +579,46 @@ function App() {
     }).catch(() => undefined);
   }
 
+  async function saveHazardsBulk(nextHazards: Hazard[], reason: string) {
+    setHazards(nextHazards);
+    try {
+      const response = await fetch(`${API_BASE}/hazards`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nextHazards)
+      });
+      if (!response.ok) throw new Error(reason);
+    } catch {
+      setNotice(`${reason}：本地已更新，但服务端保存失败，请检查 API 服务。`);
+    }
+  }
+
+  function replaceLocalHazard(nextHazard: Hazard) {
+    setHazards((current) => current.map((hazard) => (hazard.id === nextHazard.id ? nextHazard : hazard)));
+  }
+
+  async function runHazardAction(id: string, payload: Record<string, unknown>, fallback: (hazard: Hazard) => Hazard) {
+    const currentHazard = hazards.find((hazard) => hazard.id === id);
+    if (!currentHazard) return null;
+    const fallbackHazard = fallback(currentHazard);
+    replaceLocalHazard(fallbackHazard);
+    try {
+      const response = await fetch(`${API_BASE}/hazards/${id}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const result = (await response.json()) as { ok?: boolean; hazard?: Hazard; error?: string };
+      if (!response.ok || !result.hazard) throw new Error(result.error || "action failed");
+      replaceLocalHazard(result.hazard);
+      return result.hazard;
+    } catch (error) {
+      replaceLocalHazard(currentHazard);
+      setNotice(`服务端状态机拒绝或保存失败：${String(error instanceof Error ? error.message : error)}`);
+      return currentHazard;
+    }
+  }
+
   function toggleBatchId(id: string) {
     setBatchIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
   }
@@ -596,27 +631,35 @@ function App() {
     setBatchIds([]);
   }
 
-  function applyBatchAssign() {
+  async function applyBatchAssign() {
     if (batchIds.length === 0) {
       setNotice("请先选择需要批量分派的隐患。");
       return;
     }
     const assignedCodes: string[] = [];
-    setHazards((current) =>
-      current.map((hazard) => {
-        if (!batchIds.includes(hazard.id) || hazard.status === "已闭环") return hazard;
-        assignedCodes.push(hazard.code);
-        return {
-          ...hazard,
+    const targets = hazards.filter((hazard) => batchIds.includes(hazard.id) && hazard.status !== "已闭环");
+    for (const hazard of targets) {
+      assignedCodes.push(hazard.code);
+      await runHazardAction(
+        hazard.id,
+        {
+          action: "assign",
+          owner: batchOwner,
+          reviewer: batchReviewer,
+          due: batchDue,
+          log: `批量分派给 ${batchOwner}，复核人 ${batchReviewer}，期限 ${batchDue}`
+        },
+        (currentHazard) => ({
+          ...currentHazard,
           owner: batchOwner,
           reviewer: batchReviewer,
           due: batchDue,
           status: "待整改",
           updated: "刚刚",
-          logs: [`批量分派给 ${batchOwner}，复核人 ${batchReviewer}，期限 ${batchDue}`, ...hazard.logs]
-        };
-      })
-    );
+          logs: [`批量分派给 ${batchOwner}，复核人 ${batchReviewer}，期限 ${batchDue}`, ...currentHazard.logs]
+        })
+      );
+    }
     setNotice(`已批量分派 ${assignedCodes.length} 条隐患。`);
     appendRobotMessage(`已批量分派 ${assignedCodes.length} 条隐患给 ${batchOwner}，复核人 ${batchReviewer}。`);
     notifyRobot("批量分派完成", `${assignedCodes.join("、")}\n责任人：${batchOwner}\n复核人：${batchReviewer}\n期限：${batchDue}`);
@@ -649,35 +692,22 @@ function App() {
     }
   }
 
-  function patchSelected(partial: Partial<Hazard>, log: string) {
+  async function updateSelected<K extends keyof Hazard>(key: K, value: Hazard[K]) {
     setNotice("");
-    setHazards((current) =>
-      current.map((hazard) =>
-        hazard.id === selected.id
-          ? {
-              ...hazard,
-              ...partial,
-              updated: "刚刚",
-              logs: [log, ...hazard.logs]
-            }
-          : hazard
-      )
-    );
-  }
-
-  function updateSelected<K extends keyof Hazard>(key: K, value: Hazard[K]) {
-    setNotice("");
-    setHazards((current) =>
-      current.map((hazard) =>
-        hazard.id === selected.id
-          ? {
-              ...hazard,
-              [key]: value,
-              updated: "刚刚"
-            }
-          : hazard
-      )
-    );
+    const nextHazard = { ...selected, [key]: value, updated: "刚刚" };
+    replaceLocalHazard(nextHazard);
+    try {
+      const response = await fetch(`${API_BASE}/hazards/${selected.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: value })
+      });
+      const result = (await response.json()) as { hazard?: Hazard; error?: string };
+      if (!response.ok || !result.hazard) throw new Error(result.error || "patch failed");
+      replaceLocalHazard(result.hazard);
+    } catch {
+      setNotice("字段保存失败，本地已暂存，请检查 API 服务。");
+    }
   }
 
   function createFromReport() {
@@ -710,7 +740,7 @@ function App() {
         logs: ["从报告文本快拆生成，等待分派责任人"]
       };
     });
-    setHazards((current) => [...created, ...current]);
+    void saveHazardsBulk([...created, ...hazards], "报告快拆保存失败");
     setSelectedId(created[0].id);
     appendRobotMessage(`已从报告文本拆出 ${created.length} 条隐患单，等待分派责任人。`);
   }
@@ -792,12 +822,43 @@ function App() {
     }
     if (!selected.owner || selected.owner === "待分派") {
       const fallbackOwner = ownerOptions.find((owner) => owner !== "待分派") || projectConfig.maintainerName;
-      patchSelected({ owner: fallbackOwner, status: "待整改" }, "系统按项目配置补齐默认责任人并生成整改链接");
+      void runHazardAction(
+        selected.id,
+        {
+          action: "assign",
+          owner: fallbackOwner,
+          reviewer: selected.reviewer,
+          due: selected.due,
+          log: "系统按项目配置补齐默认责任人并生成整改链接"
+        },
+        (hazard) => ({
+          ...hazard,
+          owner: fallbackOwner,
+          status: "待整改",
+          updated: "刚刚",
+          logs: ["系统按项目配置补齐默认责任人并生成整改链接", ...hazard.logs]
+        })
+      );
       appendRobotMessage(`${selected.code} 已分派给 ${fallbackOwner}，请在 ${selected.due} 前提交整改证据。`);
       notifyRobot("隐患已分派", `${selected.code} 已分派给 ${fallbackOwner}，请在 ${selected.due} 前提交整改证据。`);
       return;
     }
-    patchSelected({ status: "待整改" }, `已分派给 ${selected.owner}，生成 H5 整改链接`);
+    void runHazardAction(
+      selected.id,
+      {
+        action: "assign",
+        owner: selected.owner,
+        reviewer: selected.reviewer,
+        due: selected.due,
+        log: `已分派给 ${selected.owner}，生成 H5 整改链接`
+      },
+      (hazard) => ({
+        ...hazard,
+        status: "待整改",
+        updated: "刚刚",
+        logs: [`已分派给 ${selected.owner}，生成 H5 整改链接`, ...hazard.logs]
+      })
+    );
     appendRobotMessage(`${selected.code} 已分派给 ${selected.owner}，整改链接已发送。`);
     notifyRobot("整改链接已生成", `${selected.code} 已分派给 ${selected.owner}。\n整改链接：${buildAppLink("rectify", selected.id)}`);
   }
@@ -820,12 +881,16 @@ function App() {
       setNotice("请先填写整改后照片、视频或凭证名称。");
       return;
     }
-    patchSelected(
-      {
+    void runHazardAction(
+      selected.id,
+      { action: "submitEvidence", evidence: value, log: `${selected.owner} 提交整改证据：${value}` },
+      (hazard) => ({
+        ...hazard,
         status: "待复核",
-        afterEvidence: Array.from(new Set([...selected.afterEvidence, value]))
-      },
-      `${selected.owner} 提交整改证据：${value}`
+        afterEvidence: Array.from(new Set([...hazard.afterEvidence, value])),
+        updated: "刚刚",
+        logs: [`${hazard.owner} 提交整改证据：${value}`, ...hazard.logs]
+      })
     );
     setEvidenceDraft("");
     appendRobotMessage(`${selected.code} 已提交整改证据，等待 ${selected.reviewer} 复核。`);
@@ -843,12 +908,17 @@ function App() {
       const response = await fetch(`${API_BASE}/upload`, { method: "POST", body: formData });
       if (!response.ok) throw new Error("upload failed");
       const uploaded = (await response.json()) as { originalName: string; url: string; publicUrl?: string };
-      patchSelected(
-        {
+      const evidence = `${uploaded.originalName} (${uploaded.publicUrl || uploaded.url})`;
+      void runHazardAction(
+        selected.id,
+        { action: "submitEvidence", evidence, log: `${selected.owner} 上传整改文件：${uploaded.originalName}` },
+        (hazard) => ({
+          ...hazard,
           status: "待复核",
-          afterEvidence: Array.from(new Set([...selected.afterEvidence, `${uploaded.originalName} (${uploaded.publicUrl || uploaded.url})`]))
-        },
-        `${selected.owner} 上传整改文件：${uploaded.originalName}`
+          afterEvidence: Array.from(new Set([...hazard.afterEvidence, evidence])),
+          updated: "刚刚",
+          logs: [`${hazard.owner} 上传整改文件：${uploaded.originalName}`, ...hazard.logs]
+        })
       );
       appendRobotMessage(`${selected.code} 已上传整改文件，等待 ${selected.reviewer} 复核。`);
       notifyRobot("整改文件已上传", `${selected.code} 已上传整改文件：${uploaded.originalName}`);
@@ -866,13 +936,17 @@ function App() {
       setNotice("没有整改后证据，不能复核通过。");
       return;
     }
-    patchSelected(
-      {
+    void runHazardAction(
+      selected.id,
+      { action: "approve", log: `${selected.reviewer} 复核通过，隐患闭环` },
+      (hazard) => ({
+        ...hazard,
         status: "已闭环",
         closedAt: todayText(),
-        rejectReason: undefined
-      },
-      `${selected.reviewer} 复核通过，隐患闭环`
+        rejectReason: undefined,
+        updated: "刚刚",
+        logs: [`${hazard.reviewer} 复核通过，隐患闭环`, ...hazard.logs]
+      })
     );
     appendRobotMessage(`${selected.code} 已闭环，已自动进入本月消防整改归档包。`);
     notifyRobot("隐患已闭环", `${selected.code} 已由 ${selected.reviewer} 复核通过，进入本月消防整改归档包。`);
@@ -883,12 +957,16 @@ function App() {
       setNotice("只有待复核的隐患可以驳回补证据。");
       return;
     }
-    patchSelected(
-      {
+    void runHazardAction(
+      selected.id,
+      { action: "reject", reason: "证据不足，请补充整改后近景照片或短视频。", log: `${selected.reviewer} 驳回整改：证据不足` },
+      (hazard) => ({
+        ...hazard,
         status: "已驳回",
-        rejectReason: "证据不足，请补充整改后近景照片或短视频。"
-      },
-      `${selected.reviewer} 驳回整改：证据不足`
+        rejectReason: "证据不足，请补充整改后近景照片或短视频。",
+        updated: "刚刚",
+        logs: [`${hazard.reviewer} 驳回整改：证据不足`, ...hazard.logs]
+      })
     );
     appendRobotMessage(`${selected.code} 复核驳回，已通知 ${selected.owner} 补充证据。`, "warning");
     notifyRobot("复核驳回", `${selected.code} 复核驳回，已通知 ${selected.owner} 补充证据。`);
@@ -899,7 +977,16 @@ function App() {
       setNotice("该隐患已闭环，不需要催办。");
       return;
     }
-    patchSelected({ status: "已逾期" }, `催办 ${selected.owner}，并记录逾期升级`);
+    void runHazardAction(
+      selected.id,
+      { action: "remind", log: `催办 ${selected.owner}，并记录逾期升级` },
+      (hazard) => ({
+        ...hazard,
+        status: "已逾期",
+        updated: "刚刚",
+        logs: [`催办 ${hazard.owner}，并记录逾期升级`, ...hazard.logs]
+      })
+    );
     appendRobotMessage(`${selected.code} 已催办 ${selected.owner}；若 24 小时内未处理，将升级给上级负责人。`, "warning");
     notifyRobot("整改催办/升级", `${selected.code} 已催办 ${selected.owner}；若 24 小时内未处理，将升级给上级负责人。`);
   }

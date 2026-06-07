@@ -213,6 +213,143 @@ function isValidHazard(hazard) {
   );
 }
 
+function nowText() {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date());
+}
+
+function isValidHazardPatch(patch) {
+  const allowedKeys = new Set([
+    "project",
+    "location",
+    "category",
+    "title",
+    "description",
+    "suggestion",
+    "severity",
+    "owner",
+    "reviewer",
+    "due",
+    "beforeEvidence"
+  ]);
+  const severities = new Set(["重大", "紧急", "普通"]);
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return false;
+  if (Object.keys(patch).some((key) => !allowedKeys.has(key))) return false;
+  if (patch.severity !== undefined && !severities.has(patch.severity)) return false;
+  if (patch.beforeEvidence !== undefined && !Array.isArray(patch.beforeEvidence)) return false;
+  return Object.entries(patch).every(([key, value]) => key === "beforeEvidence" || typeof value === "string");
+}
+
+async function replaceHazard(id, updater) {
+  const hazards = await readHazards();
+  const index = hazards.findIndex((hazard) => hazard.id === id);
+  if (index === -1) {
+    return { ok: false, status: 404, error: "hazard not found" };
+  }
+
+  const result = updater(hazards[index]);
+  if (result?.error) return { ok: false, status: result.status || 400, error: result.error };
+  const nextHazard = result?.hazard;
+  if (!isValidHazard(nextHazard)) {
+    return { ok: false, status: 400, error: "updated hazard is invalid" };
+  }
+
+  const nextHazards = [...hazards];
+  nextHazards[index] = nextHazard;
+  await writeHazards(nextHazards);
+  return { ok: true, hazard: nextHazard };
+}
+
+function applyHazardAction(hazard, action, payload = {}) {
+  const logPrefix = typeof payload.log === "string" && payload.log.trim() ? payload.log.trim() : "";
+
+  if (action === "assign") {
+    if (hazard.status === "已闭环") return { error: "closed hazard cannot be reassigned", status: 409 };
+    const owner = String(payload.owner || hazard.owner || "").trim();
+    const reviewer = String(payload.reviewer || hazard.reviewer || "").trim();
+    const due = String(payload.due || hazard.due || "").trim();
+    if (!owner || owner === "待分派") return { error: "owner is required before assignment", status: 400 };
+    if (!reviewer) return { error: "reviewer is required before assignment", status: 400 };
+    return {
+      hazard: {
+        ...hazard,
+        owner,
+        reviewer,
+        due,
+        status: "待整改",
+        updated: "刚刚",
+        logs: [logPrefix || `已分派给 ${owner}，复核人 ${reviewer}，期限 ${due}`, ...hazard.logs]
+      }
+    };
+  }
+
+  if (action === "submitEvidence") {
+    if (!["待整改", "已驳回", "已逾期"].includes(hazard.status)) {
+      return { error: "evidence can only be submitted while remediation is pending", status: 409 };
+    }
+    const evidence = String(payload.evidence || "").trim();
+    if (!evidence) return { error: "evidence is required", status: 400 };
+    return {
+      hazard: {
+        ...hazard,
+        status: "待复核",
+        afterEvidence: Array.from(new Set([...hazard.afterEvidence, evidence])),
+        updated: "刚刚",
+        logs: [logPrefix || `${hazard.owner} 提交整改证据：${evidence}`, ...hazard.logs]
+      }
+    };
+  }
+
+  if (action === "approve") {
+    if (hazard.status !== "待复核") return { error: "only reviewing hazards can be approved", status: 409 };
+    if (hazard.afterEvidence.length === 0) return { error: "cannot approve without after evidence", status: 409 };
+    return {
+      hazard: {
+        ...hazard,
+        status: "已闭环",
+        closedAt: nowText(),
+        rejectReason: undefined,
+        updated: "刚刚",
+        logs: [logPrefix || `${hazard.reviewer} 复核通过，隐患闭环`, ...hazard.logs]
+      }
+    };
+  }
+
+  if (action === "reject") {
+    if (hazard.status !== "待复核") return { error: "only reviewing hazards can be rejected", status: 409 };
+    const reason = String(payload.reason || "证据不足，请补充整改后近景照片或短视频。").trim();
+    return {
+      hazard: {
+        ...hazard,
+        status: "已驳回",
+        rejectReason: reason,
+        updated: "刚刚",
+        logs: [logPrefix || `${hazard.reviewer} 驳回整改：${reason}`, ...hazard.logs]
+      }
+    };
+  }
+
+  if (action === "remind") {
+    if (hazard.status === "已闭环") return { error: "closed hazard does not need reminders", status: 409 };
+    if (hazard.status === "待分派") return { error: "unassigned hazard cannot be reminded", status: 409 };
+    return {
+      hazard: {
+        ...hazard,
+        status: "已逾期",
+        updated: "刚刚",
+        logs: [logPrefix || `催办 ${hazard.owner}，并记录逾期升级`, ...hazard.logs]
+      }
+    };
+  }
+
+  return { error: "unknown hazard action", status: 400 };
+}
+
 const storage = multer.diskStorage({
   destination: (_req, _file, callback) => callback(null, uploadDir),
   filename: (_req, file, callback) => {
@@ -383,6 +520,16 @@ app.get("/api/hazards", async (_req, res) => {
   res.json(await readHazards());
 });
 
+app.get("/api/hazards/:id", async (req, res) => {
+  const hazards = await readHazards();
+  const hazard = hazards.find((item) => item.id === req.params.id);
+  if (!hazard) {
+    res.status(404).json({ ok: false, error: "hazard not found" });
+    return;
+  }
+  res.json(hazard);
+});
+
 app.put("/api/hazards", async (req, res) => {
   if (!Array.isArray(req.body)) {
     res.status(400).json({ error: "hazards must be an array" });
@@ -394,6 +541,35 @@ app.put("/api/hazards", async (req, res) => {
   }
   await writeHazards(req.body);
   res.json({ ok: true, count: req.body.length });
+});
+
+app.patch("/api/hazards/:id", async (req, res) => {
+  if (!isValidHazardPatch(req.body)) {
+    res.status(400).json({ ok: false, error: "invalid hazard patch" });
+    return;
+  }
+  const result = await replaceHazard(req.params.id, (hazard) => ({
+    hazard: {
+      ...hazard,
+      ...req.body,
+      updated: "刚刚"
+    }
+  }));
+  if (!result.ok) {
+    res.status(result.status).json({ ok: false, error: result.error });
+    return;
+  }
+  res.json({ ok: true, hazard: result.hazard });
+});
+
+app.post("/api/hazards/:id/actions", async (req, res) => {
+  const action = String(req.body?.action || "");
+  const result = await replaceHazard(req.params.id, (hazard) => applyHazardAction(hazard, action, req.body));
+  if (!result.ok) {
+    res.status(result.status).json({ ok: false, error: result.error });
+    return;
+  }
+  res.json({ ok: true, hazard: result.hazard });
 });
 
 app.post("/api/reset", async (_req, res) => {

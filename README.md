@@ -76,7 +76,7 @@ npm run server
 
 ## 状态机保护
 
-当前前端已做基础状态保护：
+当前前端和后端 API 已做基础状态保护。日常字段编辑使用单条 `PATCH /api/hazards/:id`，流程动作使用 `POST /api/hazards/:id/actions`，避免普通操作全量覆盖隐患文件：
 
 ```text
 待分派：不能提交整改证据，不能上传整改文件
@@ -87,6 +87,30 @@ npm run server
 已闭环：不能重新分派、上传、驳回或催办
 没有整改后证据：不能复核通过
 ```
+
+批量导入、重置演示和试点模板初始化仍会使用全量写入，这是为了保留试点接入效率；日常编辑、分派、整改、复核、驳回和催办已经改为单条保存。
+
+## 备份与健康检查
+
+备份当前隐患数据和上传文件：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\backup.ps1
+```
+
+恢复指定备份包。恢复前默认会先自动做一次当前数据备份：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\restore.ps1 -ArchivePath backups\strong-workflow-YYYYMMDD-HHMMSS.zip
+```
+
+健康检查：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\health-check.ps1
+```
+
+健康检查会输出 JSON。若机器人未配置，会把当前模式标记为 `dry-run` 问题项，正式上线前需要处理。
 
 ## 机器人配置
 
