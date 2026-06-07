@@ -473,6 +473,68 @@ h1 {
   background: #fff2f0;
 }
 
+.simulation-box {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #d7e2e6;
+  border-radius: 8px;
+  background: #f8fbfc;
+}
+
+.simulation-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.simulation-head span,
+.simulation-section > span {
+  color: #667982;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.simulation-section {
+  display: grid;
+  gap: 5px;
+}
+
+.simulation-list {
+  display: grid;
+  gap: 5px;
+}
+
+.simulation-list > small {
+  padding: 7px 8px;
+  border-radius: 7px;
+  color: #667982;
+  background: #eef2f3;
+}
+
+.simulation-row {
+  display: grid;
+  gap: 3px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  color: #30484f;
+  background: #ffffff;
+  font-size: 12px;
+}
+
+.simulation-row.changed {
+  color: #795300;
+  background: #fff8e3;
+}
+
+.simulation-row span,
+.simulation-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .optimization-empty {
   padding: 8px;
   border-radius: 7px;

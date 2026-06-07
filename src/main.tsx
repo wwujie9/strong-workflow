@@ -216,6 +216,21 @@ type RuleOptimizationSuggestion = {
   conflict: RuleConflictCheck;
 };
 
+type RuleSimulationPreview = {
+  appendedHits: RuleSimulationItem[];
+  priorityImpacts: RuleSimulationItem[];
+};
+
+type RuleSimulationItem = {
+  id: string;
+  code: string;
+  title: string;
+  previousRule: string;
+  previousOwner: string;
+  nextOwner: string;
+  ownerChanged: boolean;
+};
+
 type RuleConflictCheck = {
   level: "低" | "中" | "高";
   summary: string;
@@ -746,6 +761,28 @@ function buildRuleConflictCheck(suggestion: Omit<RuleOptimizationSuggestion, "co
         ? "关键词和已有规则有重叠，建议确认是否需要合并或改窄"
         : "未发现明显冲突，可直接加入客户模板";
   return { level, summary, keywordOverlaps, affectedItems };
+}
+
+function matchesSuggestionRule(item: AssignmentSuggestionItem, suggestion: Pick<RuleOptimizationSuggestion, "keywords">) {
+  const text = `${item.category}${item.title}${item.description}${item.location}`;
+  return suggestion.keywords.some((keyword) => keyword && text.includes(keyword));
+}
+
+function buildRuleSimulationPreview(suggestion: RuleOptimizationSuggestion, allItems: AssignmentSuggestionItem[]): RuleSimulationPreview {
+  const toSimulationItem = (item: AssignmentSuggestionItem): RuleSimulationItem => ({
+    id: item.id,
+    code: item.code,
+    title: item.title,
+    previousRule: item.ruleLabel,
+    previousOwner: item.owner,
+    nextOwner: suggestion.owner,
+    ownerChanged: item.owner !== suggestion.owner
+  });
+  const matched = allItems.filter((item) => matchesSuggestionRule(item, suggestion));
+  return {
+    appendedHits: matched.filter((item) => item.ruleId === "default").slice(0, 6).map(toSimulationItem),
+    priorityImpacts: matched.filter((item) => item.ruleId !== "default").slice(0, 6).map(toSimulationItem)
+  };
 }
 
 function buildRuleOptimizationSuggestions(items: AssignmentSuggestionItem[], config: ProjectConfig, allItems: AssignmentSuggestionItem[]): RuleOptimizationSuggestion[] {
@@ -2698,6 +2735,7 @@ function OptimizationSuggestionEditor({
     };
     return { ...base, conflict: buildRuleConflictCheck(base, config, allItems) };
   }, [allItems, config, dueDays, keywordsText, label, owner, reviewer, suggestion]);
+  const simulation = useMemo(() => buildRuleSimulationPreview(editedSuggestion, allItems), [allItems, editedSuggestion]);
 
   const canApply = Boolean(editedSuggestion.label.trim() && editedSuggestion.keywords.length > 0 && editedSuggestion.conflict.level !== "高");
 
@@ -2754,10 +2792,48 @@ function OptimizationSuggestionEditor({
           <span>待填写关键词</span>
         )}
       </div>
+      <div className="simulation-box">
+        <div className="simulation-head">
+          <strong>模拟命中预览</strong>
+          <span>当前优先级新增 {simulation.appendedHits.length} 条 · 提前优先级影响 {simulation.priorityImpacts.length} 条</span>
+        </div>
+        <div className="simulation-section">
+          <span>按当前优先级加入后会接住</span>
+          <div className="simulation-list">
+            {simulation.appendedHits.length ? (
+              simulation.appendedHits.map((item) => <SimulationRow item={item} key={`append-${item.id}`} />)
+            ) : (
+              <small>暂无新增命中；建议继续调整关键词。</small>
+            )}
+          </div>
+        </div>
+        <div className="simulation-section">
+          <span>如果未来调高优先级可能影响</span>
+          <div className="simulation-list">
+            {simulation.priorityImpacts.length ? (
+              simulation.priorityImpacts.map((item) => <SimulationRow item={item} key={`priority-${item.id}`} />)
+            ) : (
+              <small>不会影响当前已命中其他规则的隐患。</small>
+            )}
+          </div>
+        </div>
+      </div>
       <button className="ghost compact" disabled={!canApply} onClick={() => onApply(editedSuggestion)}>
         <Plus size={15} />
         加入规则
       </button>
+    </div>
+  );
+}
+
+function SimulationRow({ item }: { item: RuleSimulationItem }) {
+  return (
+    <div className={item.ownerChanged ? "simulation-row changed" : "simulation-row"}>
+      <strong>{item.code}</strong>
+      <span>{item.title}</span>
+      <small>
+        原：{item.previousRule} 到 {item.previousOwner} · 新：{item.nextOwner}
+      </small>
     </div>
   );
 }
