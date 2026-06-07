@@ -288,9 +288,26 @@ function normalizeNameList(values, includePending = false) {
   return Array.from(new Set(list));
 }
 
+function normalizeDueDays(value, fallback = 7) {
+  const days = Number(value);
+  return Number.isFinite(days) && days > 0 && days <= 365 ? Math.round(days) : fallback;
+}
+
 function normalizeProjectConfig(config = {}) {
   const assignmentRules = config.assignmentRules && typeof config.assignmentRules === "object" ? config.assignmentRules : {};
   const keywordRules = Array.isArray(assignmentRules.keywordRules) ? assignmentRules.keywordRules : defaultProjectConfig.assignmentRules.keywordRules;
+  const normalizedKeywordRules = keywordRules
+    .map((rule, index) => ({
+      id: String(rule.id || `rule-${index + 1}`).trim(),
+      label: String(rule.label || `规则 ${index + 1}`).trim(),
+      keywords: Array.isArray(rule.keywords) ? rule.keywords.map((keyword) => String(keyword).trim()).filter(Boolean) : [],
+      owner: String(rule.owner || assignmentRules.fallbackOwner || defaultProjectConfig.assignmentRules.fallbackOwner).trim(),
+      reviewer: String(rule.reviewer || assignmentRules.fallbackReviewer || defaultProjectConfig.assignmentRules.fallbackReviewer).trim(),
+      dueDays: normalizeDueDays(rule.dueDays || assignmentRules.dueDays, defaultProjectConfig.assignmentRules.dueDays)
+    }))
+    .filter((rule) => rule.keywords.length > 0 && rule.owner);
+  const fallbackOwner = String(assignmentRules.fallbackOwner || config.fallbackOwner || defaultProjectConfig.assignmentRules.fallbackOwner).trim();
+  const fallbackReviewer = String(assignmentRules.fallbackReviewer || config.fallbackReviewer || defaultProjectConfig.assignmentRules.fallbackReviewer).trim();
   return {
     schemaVersion: 2,
     templateId: String(config.templateId || defaultProjectConfig.templateId).trim(),
@@ -299,22 +316,13 @@ function normalizeProjectConfig(config = {}) {
     projectName: String(config.projectName || defaultProjectConfig.projectName).trim(),
     maintainerName: String(config.maintainerName || defaultProjectConfig.maintainerName).trim(),
     defaultDue: String(config.defaultDue || defaultProjectConfig.defaultDue).trim(),
-    owners: normalizeNameList(config.owners || defaultProjectConfig.owners, true),
-    reviewers: normalizeNameList(config.reviewers || defaultProjectConfig.reviewers),
+    owners: normalizeNameList([...(Array.isArray(config.owners) ? config.owners : defaultProjectConfig.owners), fallbackOwner, ...normalizedKeywordRules.map((rule) => rule.owner)], true),
+    reviewers: normalizeNameList([...(Array.isArray(config.reviewers) ? config.reviewers : defaultProjectConfig.reviewers), fallbackReviewer, ...normalizedKeywordRules.map((rule) => rule.reviewer)], false),
     assignmentRules: {
-      fallbackOwner: String(assignmentRules.fallbackOwner || config.fallbackOwner || defaultProjectConfig.assignmentRules.fallbackOwner).trim(),
-      fallbackReviewer: String(assignmentRules.fallbackReviewer || config.fallbackReviewer || defaultProjectConfig.assignmentRules.fallbackReviewer).trim(),
-      dueDays: Number(assignmentRules.dueDays || config.dueDays || defaultProjectConfig.assignmentRules.dueDays),
-      keywordRules: keywordRules
-        .map((rule, index) => ({
-          id: String(rule.id || `rule-${index + 1}`).trim(),
-          label: String(rule.label || `规则 ${index + 1}`).trim(),
-          keywords: Array.isArray(rule.keywords) ? rule.keywords.map((keyword) => String(keyword).trim()).filter(Boolean) : [],
-          owner: String(rule.owner || assignmentRules.fallbackOwner || defaultProjectConfig.assignmentRules.fallbackOwner).trim(),
-          reviewer: String(rule.reviewer || assignmentRules.fallbackReviewer || defaultProjectConfig.assignmentRules.fallbackReviewer).trim(),
-          dueDays: Number(rule.dueDays || assignmentRules.dueDays || defaultProjectConfig.assignmentRules.dueDays)
-        }))
-        .filter((rule) => rule.keywords.length > 0 && rule.owner)
+      fallbackOwner,
+      fallbackReviewer,
+      dueDays: normalizeDueDays(assignmentRules.dueDays || config.dueDays, defaultProjectConfig.assignmentRules.dueDays),
+      keywordRules: normalizedKeywordRules
     }
   };
 }

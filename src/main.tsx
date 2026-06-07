@@ -191,6 +191,7 @@ type DrillRecord = {
   importedCount: number;
   blockingCount: number;
   warningCount: number;
+  matchedRuleCount: number;
   suggestedOwner: string;
   suggestedReviewer: string;
   suggestedDue: string;
@@ -568,29 +569,45 @@ function normalizeNameList(values: string[] | string, includePending = false) {
   return Array.from(new Set(list));
 }
 
+function normalizeDueDays(value: unknown, fallback = 7) {
+  const days = Number(value);
+  return Number.isFinite(days) && days > 0 && days <= 365 ? Math.round(days) : fallback;
+}
+
 function normalizeProjectConfig(config: Partial<ProjectConfig>): ProjectConfig {
   const rules = config.assignmentRules || defaultProjectConfig.assignmentRules!;
   const keywordRules = Array.isArray(rules.keywordRules) ? rules.keywordRules : defaultProjectConfig.assignmentRules!.keywordRules || [];
+  const normalizedRules = keywordRules.map((rule, index) => ({
+    id: rule.id || `rule-${index + 1}`,
+    label: rule.label || `规则 ${index + 1}`,
+    keywords: Array.isArray(rule.keywords) ? rule.keywords.map((keyword) => String(keyword).trim()).filter(Boolean) : [],
+        owner: rule.owner || rules.fallbackOwner || defaultProjectConfig.assignmentRules!.fallbackOwner,
+        reviewer: rule.reviewer || rules.fallbackReviewer || defaultProjectConfig.assignmentRules!.fallbackReviewer,
+        dueDays: normalizeDueDays(rule.dueDays || rules.dueDays, defaultProjectConfig.assignmentRules!.dueDays)
+      })).filter((rule) => rule.keywords.length > 0 && rule.owner);
+  const owners = normalizeNameList([
+    ...(Array.isArray(config.owners) ? config.owners : defaultProjectConfig.owners),
+    rules.fallbackOwner || defaultProjectConfig.assignmentRules!.fallbackOwner,
+    ...normalizedRules.map((rule) => rule.owner)
+  ], true);
+  const reviewers = normalizeNameList([
+    ...(Array.isArray(config.reviewers) ? config.reviewers : defaultProjectConfig.reviewers),
+    rules.fallbackReviewer || defaultProjectConfig.assignmentRules!.fallbackReviewer,
+    ...normalizedRules.map((rule) => rule.reviewer || "")
+  ]);
   return {
     ...defaultProjectConfig,
     ...config,
     schemaVersion: 2,
     templateId: config.templateId || defaultProjectConfig.templateId,
     industry: config.industry || defaultProjectConfig.industry,
-    owners: normalizeNameList(config.owners || defaultProjectConfig.owners, true),
-    reviewers: normalizeNameList(config.reviewers || defaultProjectConfig.reviewers),
+    owners,
+    reviewers,
     assignmentRules: {
       fallbackOwner: rules.fallbackOwner || defaultProjectConfig.assignmentRules!.fallbackOwner,
       fallbackReviewer: rules.fallbackReviewer || defaultProjectConfig.assignmentRules!.fallbackReviewer,
-      dueDays: Number(rules.dueDays || defaultProjectConfig.assignmentRules!.dueDays),
-      keywordRules: keywordRules.map((rule, index) => ({
-        id: rule.id || `rule-${index + 1}`,
-        label: rule.label || `规则 ${index + 1}`,
-        keywords: Array.isArray(rule.keywords) ? rule.keywords.map((keyword) => String(keyword).trim()).filter(Boolean) : [],
-        owner: rule.owner || rules.fallbackOwner || defaultProjectConfig.assignmentRules!.fallbackOwner,
-        reviewer: rule.reviewer || rules.fallbackReviewer || defaultProjectConfig.assignmentRules!.fallbackReviewer,
-        dueDays: Number(rule.dueDays || rules.dueDays || defaultProjectConfig.assignmentRules!.dueDays)
-      })).filter((rule) => rule.keywords.length > 0 && rule.owner)
+      dueDays: normalizeDueDays(rules.dueDays, defaultProjectConfig.assignmentRules!.dueDays),
+      keywordRules: normalizedRules
     }
   };
 }
@@ -771,6 +788,12 @@ function buildCsvImportState({
     if (rowErrors) return;
     const baseHazard = createHazardFromCsvRow(row, index, config, existingHazards.length, mapping);
     const rule = !values.owner ? matchAssignmentRule(baseHazard, config) : undefined;
+    if (!values.owner && rule) {
+      issues.push({ row: rowNumber, field: "模板规则", message: `命中 ${rule.label}，建议责任人 ${rule.owner}`, level: "warning" });
+    }
+    if (!values.owner && !rule) {
+      issues.push({ row: rowNumber, field: "模板规则", message: "未命中关键词规则，将使用默认责任人", level: "warning" });
+    }
     const hazard = rule
       ? {
           ...baseHazard,
@@ -1042,6 +1065,7 @@ function App() {
       importedCount: importedHazards.length,
       blockingCount: csvImport.issues.filter((issue) => issue.level === "error").length,
       warningCount: csvImport.issues.filter((issue) => issue.level === "warning").length,
+      matchedRuleCount: suggestion.matchedCount,
       suggestedOwner: suggestion.owner,
       suggestedReviewer: suggestion.reviewer,
       suggestedDue: suggestion.due
@@ -1140,6 +1164,7 @@ function App() {
       `- 成功导入：${drillRecord.importedCount} 条`,
       `- 阻断问题：${drillRecord.blockingCount} 个`,
       `- 提醒问题：${drillRecord.warningCount} 个`,
+      `- 规则命中：${drillRecord.matchedRuleCount} 条`,
       `- 建议责任人：${drillRecord.suggestedOwner}`,
       `- 建议复核人：${drillRecord.suggestedReviewer}`,
       `- 建议期限：${drillRecord.suggestedDue}`,
@@ -1337,7 +1362,7 @@ function App() {
       const next = hazards.length + index + 1;
       const category = inferCategory(line);
       const severity = inferSeverity(line);
-      return {
+      const baseHazard: Hazard = {
         id: `hz-${String(next).padStart(3, "0")}`,
         code: `XF-2026-${String(next).padStart(3, "0")}`,
         project: projectConfig.projectName,
@@ -1355,6 +1380,15 @@ function App() {
         afterEvidence: [],
         updated: "刚刚",
         logs: ["从报告文本快拆生成，等待分派责任人"]
+      };
+      const rule = matchAssignmentRule(baseHazard, projectConfig);
+      if (!rule) return baseHazard;
+      return {
+        ...baseHazard,
+        owner: rule.owner,
+        reviewer: rule.reviewer || baseHazard.reviewer,
+        due: addDays(new Date().toISOString().slice(0, 10), rule.dueDays || projectConfig.assignmentRules?.dueDays || 7),
+        logs: [`按模板规则建议分派：${rule.label} -> ${rule.owner}`, ...baseHazard.logs]
       };
     });
     void saveHazardsBulk([...created, ...hazards], "报告快拆保存失败");
@@ -1438,26 +1472,32 @@ function App() {
       return;
     }
     if (!selected.owner || selected.owner === "待分派") {
-      const fallbackOwner = ownerOptions.find((owner) => owner !== "待分派") || projectConfig.maintainerName;
+      const rule = matchAssignmentRule(selected, projectConfig);
+      const fallbackOwner = rule?.owner || ownerOptions.find((owner) => owner !== "待分派") || projectConfig.maintainerName;
+      const fallbackReviewer = rule?.reviewer || selected.reviewer;
+      const fallbackDue = rule ? addDays(new Date().toISOString().slice(0, 10), rule.dueDays || projectConfig.assignmentRules?.dueDays || 7) : selected.due;
+      const log = rule ? `按模板规则分派：${rule.label} -> ${fallbackOwner}` : "系统按项目配置补齐默认责任人并生成整改链接";
       void runHazardAction(
         selected.id,
         {
           action: "assign",
           owner: fallbackOwner,
-          reviewer: selected.reviewer,
-          due: selected.due,
-          log: "系统按项目配置补齐默认责任人并生成整改链接"
+          reviewer: fallbackReviewer,
+          due: fallbackDue,
+          log
         },
         (hazard) => ({
           ...hazard,
           owner: fallbackOwner,
+          reviewer: fallbackReviewer,
+          due: fallbackDue,
           status: "待整改",
           updated: "刚刚",
-          logs: ["系统按项目配置补齐默认责任人并生成整改链接", ...hazard.logs]
+          logs: [log, ...hazard.logs]
         })
       );
-      appendRobotMessage(`${selected.code} 已分派给 ${fallbackOwner}，请在 ${selected.due} 前提交整改证据。`);
-      notifyRobot("隐患已分派", buildGroupMessage("rectify", { ...selected, owner: fallbackOwner }), "assign");
+      appendRobotMessage(`${selected.code} 已分派给 ${fallbackOwner}，请在 ${fallbackDue} 前提交整改证据。`);
+      notifyRobot("隐患已分派", buildGroupMessage("rectify", { ...selected, owner: fallbackOwner, reviewer: fallbackReviewer, due: fallbackDue }), "assign");
       return;
     }
     void runHazardAction(
@@ -2297,6 +2337,7 @@ function CustomerOnboardingPanel({
               <p>{drillRecord.at} · {drillRecord.fileName}</p>
               <div className="suggestion-grid">
                 <span>导入</span><strong>{drillRecord.importedCount} 条</strong>
+                <span>命中</span><strong>{drillRecord.matchedRuleCount} 条</strong>
                 <span>阻断</span><strong>{drillRecord.blockingCount} 个</strong>
                 <span>提醒</span><strong>{drillRecord.warningCount} 个</strong>
               </div>
