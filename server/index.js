@@ -120,7 +120,8 @@ const defaultProjectConfig = {
       { id: "sprinkler-tenant", label: "喷淋遮挡/堆放", keywords: ["喷淋", "遮挡", "货物", "堆放"], owner: "仓储主管-刘主管", reviewer: "维保项目-李工", dueDays: 3 },
       { id: "passage-property", label: "消防通道/疏散", keywords: ["通道", "疏散", "占用", "堵塞"], owner: "物业工程-陈工", reviewer: "安全负责人-周经理", dueDays: 2 }
     ]
-  }
+  },
+  templateAuditLog: []
 };
 
 const projectTemplates = [
@@ -293,6 +294,21 @@ function normalizeDueDays(value, fallback = 7) {
   return Number.isFinite(days) && days > 0 && days <= 365 ? Math.round(days) : fallback;
 }
 
+function normalizeTemplateAuditLog(logs = []) {
+  if (!Array.isArray(logs)) return [];
+  return logs
+    .map((entry, index) => ({
+      id: String(entry?.id || `audit-${index + 1}`).trim(),
+      at: String(entry?.at || new Date().toISOString()).trim(),
+      actor: String(entry?.actor || "系统").trim(),
+      action: ["新增规则", "编辑规则", "调整优先级"].includes(String(entry?.action)) ? String(entry.action) : "编辑规则",
+      summary: String(entry?.summary || "模板规则变更").trim(),
+      details: Array.isArray(entry?.details) ? entry.details.map((detail) => String(detail).trim()).filter(Boolean).slice(0, 8) : []
+    }))
+    .filter((entry) => entry.id && entry.summary)
+    .slice(0, 80);
+}
+
 function normalizeProjectConfig(config = {}) {
   const assignmentRules = config.assignmentRules && typeof config.assignmentRules === "object" ? config.assignmentRules : {};
   const keywordRules = Array.isArray(assignmentRules.keywordRules) ? assignmentRules.keywordRules : defaultProjectConfig.assignmentRules.keywordRules;
@@ -323,7 +339,8 @@ function normalizeProjectConfig(config = {}) {
       fallbackReviewer,
       dueDays: normalizeDueDays(assignmentRules.dueDays || config.dueDays, defaultProjectConfig.assignmentRules.dueDays),
       keywordRules: normalizedKeywordRules
-    }
+    },
+    templateAuditLog: normalizeTemplateAuditLog(config.templateAuditLog)
   };
 }
 

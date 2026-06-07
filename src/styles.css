@@ -574,6 +574,75 @@ h1 {
   background: #f8fbfc;
 }
 
+.template-audit-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #dce6ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.template-audit-head,
+.template-audit-item > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.template-audit-head p {
+  margin-top: 4px;
+  color: #667982;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.template-audit-head > span {
+  flex: 0 0 auto;
+  color: #14746f;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.template-audit-list {
+  display: grid;
+  gap: 8px;
+}
+
+.template-audit-list > small {
+  color: #667982;
+}
+
+.template-audit-item {
+  display: grid;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid #e1e9ec;
+  border-radius: 8px;
+  background: #f8fbfc;
+}
+
+.template-audit-item span,
+.template-audit-item small,
+.template-audit-item p {
+  color: #667982;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.template-audit-item span,
+.template-audit-item p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-audit-item p {
+  margin: 0;
+}
+
 .rule-priority-head,
 .rule-priority-actions,
 .priority-rule,
@@ -614,6 +683,7 @@ h1 {
   border: 1px solid #d7e2e6;
   border-radius: 8px;
   background: #ffffff;
+  flex-wrap: wrap;
 }
 
 .priority-rule.dragging {
@@ -657,6 +727,45 @@ h1 {
   background: #ffffff;
   font-size: 12px;
   font-weight: 800;
+}
+
+.priority-edit-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #edf2f4;
+}
+
+.priority-edit-form label {
+  display: grid;
+  gap: 4px;
+  color: #667982;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.priority-edit-form input,
+.priority-edit-form select,
+.priority-edit-form textarea {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid #d7e2e6;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #17202a;
+  padding: 6px 8px;
+  outline: 0;
+}
+
+.priority-edit-form textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+
+.priority-edit-form label:nth-child(2) {
+  grid-row: span 2;
 }
 
 .inline-actions {
@@ -1541,6 +1650,10 @@ textarea:focus-visible {
 
   .setup-grid .field:nth-last-child(-n + 2) {
     grid-column: auto;
+  }
+
+  .priority-edit-form {
+    grid-template-columns: 1fr;
   }
 
   .inline-actions,

@@ -121,6 +121,7 @@ type ProjectConfig = {
     dueDays: number;
     keywordRules?: AssignmentRule[];
   };
+  templateAuditLog?: TemplateAuditLog[];
 };
 
 type AssignmentRule = {
@@ -130,6 +131,17 @@ type AssignmentRule = {
   owner: string;
   reviewer?: string;
   dueDays?: number;
+};
+
+type TemplateAuditAction = "新增规则" | "编辑规则" | "调整优先级";
+
+type TemplateAuditLog = {
+  id: string;
+  at: string;
+  actor: string;
+  action: TemplateAuditAction;
+  summary: string;
+  details: string[];
 };
 
 type CsvImportState = {
@@ -305,7 +317,8 @@ const defaultProjectConfig: ProjectConfig = {
       { id: "sprinkler-tenant", label: "喷淋遮挡/堆放", keywords: ["喷淋", "遮挡", "货物", "堆放"], owner: "仓储主管-刘主管", reviewer: "维保项目-李工", dueDays: 3 },
       { id: "passage-property", label: "消防通道/疏散", keywords: ["通道", "疏散", "占用", "堵塞"], owner: "物业工程-陈工", reviewer: "安全负责人-周经理", dueDays: 2 }
     ]
-  }
+  },
+  templateAuditLog: []
 };
 
 const projectTemplates: ProjectTemplate[] = [
@@ -648,6 +661,24 @@ function normalizeDueDays(value: unknown, fallback = 7) {
   return Number.isFinite(days) && days > 0 && days <= 365 ? Math.round(days) : fallback;
 }
 
+function normalizeTemplateAuditLog(logs: unknown): TemplateAuditLog[] {
+  if (!Array.isArray(logs)) return [];
+  return logs
+    .map((entry, index) => {
+      const value = entry as Partial<TemplateAuditLog>;
+      return {
+        id: String(value.id || `audit-${index + 1}`).trim(),
+        at: String(value.at || new Date().toISOString()).trim(),
+        actor: String(value.actor || "系统").trim(),
+        action: (["新增规则", "编辑规则", "调整优先级"].includes(String(value.action)) ? value.action : "编辑规则") as TemplateAuditAction,
+        summary: String(value.summary || "模板规则变更").trim(),
+        details: Array.isArray(value.details) ? value.details.map((detail) => String(detail).trim()).filter(Boolean).slice(0, 8) : []
+      };
+    })
+    .filter((entry) => entry.id && entry.summary)
+    .slice(0, 80);
+}
+
 function normalizeProjectConfig(config: Partial<ProjectConfig>): ProjectConfig {
   const rules = config.assignmentRules || defaultProjectConfig.assignmentRules!;
   const keywordRules = Array.isArray(rules.keywordRules) ? rules.keywordRules : defaultProjectConfig.assignmentRules!.keywordRules || [];
@@ -682,8 +713,54 @@ function normalizeProjectConfig(config: Partial<ProjectConfig>): ProjectConfig {
       fallbackReviewer: rules.fallbackReviewer || defaultProjectConfig.assignmentRules!.fallbackReviewer,
       dueDays: normalizeDueDays(rules.dueDays, defaultProjectConfig.assignmentRules!.dueDays),
       keywordRules: normalizedRules
-    }
+    },
+    templateAuditLog: normalizeTemplateAuditLog(config.templateAuditLog)
   };
+}
+
+function buildTemplateAuditEntry(config: ProjectConfig, action: TemplateAuditAction, summary: string, details: string[] = []): TemplateAuditLog {
+  return {
+    id: `audit-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    at: new Date().toISOString(),
+    actor: config.maintainerName || "系统",
+    action,
+    summary,
+    details: details.filter(Boolean).slice(0, 8)
+  };
+}
+
+function withTemplateAuditLog(config: ProjectConfig, entry: TemplateAuditLog): ProjectConfig {
+  return normalizeProjectConfig({
+    ...config,
+    templateAuditLog: [entry, ...(config.templateAuditLog || [])].slice(0, 80)
+  });
+}
+
+function ruleFingerprint(rules: AssignmentRule[]) {
+  return JSON.stringify(rules.map((rule) => ({
+    id: rule.id,
+    label: rule.label,
+    keywords: rule.keywords,
+    owner: rule.owner,
+    reviewer: rule.reviewer || "",
+    dueDays: rule.dueDays || 0
+  })));
+}
+
+function summarizeRuleEdits(currentRules: AssignmentRule[], draftRules: AssignmentRule[]) {
+  const currentMap = new Map(currentRules.map((rule) => [rule.id, rule]));
+  return draftRules.flatMap((rule) => {
+    const current = currentMap.get(rule.id);
+    if (!current || ruleFingerprint([current]) === ruleFingerprint([rule])) return [];
+    const changes = [
+      current.label !== rule.label ? `名称：${current.label} 到 ${rule.label}` : "",
+      current.keywords.join("、") !== rule.keywords.join("、") ? `关键词：${current.keywords.join("、")} 到 ${rule.keywords.join("、")}` : "",
+      current.owner !== rule.owner ? `责任人：${current.owner} 到 ${rule.owner}` : "",
+      (current.reviewer || "") !== (rule.reviewer || "") ? `复核人：${current.reviewer || "未设置"} 到 ${rule.reviewer || "未设置"}` : "",
+      (current.dueDays || 0) !== (rule.dueDays || 0) ? `期限：${current.dueDays || "默认"} 天到 ${rule.dueDays || "默认"} 天` : ""
+    ].filter(Boolean);
+    return changes.length ? [`${rule.label}：${changes.join("；")}`] : [];
+  });
 }
 
 function addDays(dateText: string, days: number) {
@@ -1220,7 +1297,15 @@ function App() {
         keywordRules: [...(currentRules.keywordRules || []), nextRule]
       }
     });
-    setProjectConfig(nextConfig);
+    const auditedConfig = withTemplateAuditLog(nextConfig, buildTemplateAuditEntry(nextConfig, "新增规则", `新增模板规则：${nextRule.label}`, [
+      `关键词：${nextRule.keywords.join("、")}`,
+      `责任人：${nextRule.owner}`,
+      `复核人：${nextRule.reviewer || nextConfig.assignmentRules?.fallbackReviewer || "未设置"}`,
+      `期限：${nextRule.dueDays || nextConfig.assignmentRules?.dueDays || 7} 天`,
+      `建议命中：${suggestion.hitCount} 条`,
+      `冲突等级：${suggestion.conflict.level}，${suggestion.conflict.summary}`
+    ]));
+    setProjectConfig(auditedConfig);
     setNotice(`已加入模板规则：${nextRule.label}，关键词 ${nextRule.keywords.join("、")}。后续导入会自动命中。`);
   }
 
@@ -2946,7 +3031,39 @@ function ProjectSetupPanel({
         </Field>
       </div>
       <RulePriorityPanel config={config} hazards={hazards} onChange={onChange} />
+      <TemplateAuditPanel entries={config.templateAuditLog || []} />
     </section>
+  );
+}
+
+function TemplateAuditPanel({ entries }: { entries: TemplateAuditLog[] }) {
+  const recentEntries = entries.slice(0, 6);
+  return (
+    <div className="template-audit-panel">
+      <div className="template-audit-head">
+        <div>
+          <strong>模板变更记录</strong>
+          <p>记录规则新增、编辑和优先级调整，试点后期可以追溯模板为什么被改动。</p>
+        </div>
+        <span>{entries.length} 条</span>
+      </div>
+      <div className="template-audit-list">
+        {recentEntries.length ? (
+          recentEntries.map((entry) => (
+            <div className="template-audit-item" key={entry.id}>
+              <div>
+                <strong>{entry.action}</strong>
+                <span>{entry.summary}</span>
+              </div>
+              <small>{entry.actor} · {new Date(entry.at).toLocaleString("zh-CN")}</small>
+              {entry.details.length ? <p>{entry.details.slice(0, 3).join("；")}</p> : null}
+            </div>
+          ))
+        ) : (
+          <small>暂无模板变更记录。新增规则或保存优先级后会自动记录。</small>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -2954,14 +3071,19 @@ function RulePriorityPanel({ config, hazards, onChange }: { config: ProjectConfi
   const currentRules = config.assignmentRules?.keywordRules || [];
   const [draftRules, setDraftRules] = useState<AssignmentRule[]>(currentRules);
   const [draggedId, setDraggedId] = useState("");
+  const [editingRuleId, setEditingRuleId] = useState("");
 
   useEffect(() => {
     setDraftRules(currentRules);
+    setEditingRuleId("");
   }, [config.assignmentRules?.keywordRules]);
 
-  const changed = draftRules.map((rule) => rule.id).join("|") !== currentRules.map((rule) => rule.id).join("|");
+  const orderChanged = draftRules.map((rule) => rule.id).join("|") !== currentRules.map((rule) => rule.id).join("|");
+  const contentChanged = ruleFingerprint(draftRules) !== ruleFingerprint(currentRules);
+  const changed = orderChanged || contentChanged;
   const simulation = useMemo(() => buildRulePrioritySimulation(hazards, currentRules, draftRules, config), [config, currentRules, draftRules, hazards]);
   const ownerChangeCount = simulation.filter((item) => item.ownerChanged).length;
+  const ruleEditSummaries = summarizeRuleEdits(currentRules, draftRules);
 
   function moveRule(index: number, direction: -1 | 1) {
     const nextIndex = index + direction;
@@ -2983,14 +3105,34 @@ function RulePriorityPanel({ config, hazards, onChange }: { config: ProjectConfi
     setDraggedId("");
   }
 
+  function patchDraftRule(ruleId: string, partial: Partial<AssignmentRule>) {
+    setDraftRules((rules) => rules.map((rule) => rule.id === ruleId ? { ...rule, ...partial } : rule));
+  }
+
   function savePriority() {
-    onChange(normalizeProjectConfig({
+    const previousOrder = currentRules.map((rule) => rule.label);
+    const nextOrder = draftRules.map((rule) => rule.label);
+    const nextConfig = normalizeProjectConfig({
       ...config,
       assignmentRules: {
         ...config.assignmentRules!,
         keywordRules: draftRules
       }
-    }));
+    });
+    const auditEntries = [
+      ruleEditSummaries.length
+        ? buildTemplateAuditEntry(nextConfig, "编辑规则", `编辑 ${ruleEditSummaries.length} 条模板规则`, ruleEditSummaries.slice(0, 8))
+        : null,
+      orderChanged
+        ? buildTemplateAuditEntry(nextConfig, "调整优先级", `调整规则优先级：影响 ${simulation.length} 条，责任人变化 ${ownerChangeCount} 条`, [
+          `原顺序：${previousOrder.join(" > ")}`,
+          `新顺序：${nextOrder.join(" > ")}`,
+          ...simulation.slice(0, 4).map((item) => `${item.code}：${item.previousRule} 到 ${item.nextRule}，${item.previousOwner} 到 ${item.nextOwner}`)
+        ])
+        : null
+    ].filter(Boolean) as TemplateAuditLog[];
+    const auditedConfig = auditEntries.reduce((next, entry) => withTemplateAuditLog(next, entry), nextConfig);
+    onChange(auditedConfig);
   }
 
   return (
@@ -3001,8 +3143,8 @@ function RulePriorityPanel({ config, hazards, onChange }: { config: ProjectConfi
           <p>越靠前越先命中。调整前先看全量模拟，避免改变责任人分派结果。</p>
         </div>
         <div className="rule-priority-actions">
-          <button className="ghost compact" disabled={!changed} onClick={() => setDraftRules(currentRules)}>撤销排序</button>
-          <button className="ghost compact" disabled={!changed} onClick={savePriority}>保存顺序</button>
+          <button className="ghost compact" disabled={!changed} onClick={() => setDraftRules(currentRules)}>撤销变更</button>
+          <button className="ghost compact" disabled={!changed} onClick={savePriority}>保存变更</button>
         </div>
       </div>
       <div className="priority-grid">
@@ -3023,9 +3165,38 @@ function RulePriorityPanel({ config, hazards, onChange }: { config: ProjectConfi
                 <small>{rule.keywords.join("、")} 到 {rule.owner}</small>
               </div>
               <div className="priority-buttons">
+                <button onClick={() => setEditingRuleId(editingRuleId === rule.id ? "" : rule.id)}>编辑</button>
                 <button disabled={index === 0} onClick={() => moveRule(index, -1)}>上移</button>
                 <button disabled={index === draftRules.length - 1} onClick={() => moveRule(index, 1)}>下移</button>
               </div>
+              {editingRuleId === rule.id ? (
+                <div className="priority-edit-form">
+                  <label>
+                    <span>规则名</span>
+                    <input value={rule.label} onChange={(event) => patchDraftRule(rule.id, { label: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>关键词</span>
+                    <textarea value={rule.keywords.join("\n")} onChange={(event) => patchDraftRule(rule.id, { keywords: event.target.value.split(/\n|,|，/).map((keyword) => keyword.trim()).filter(Boolean) })} />
+                  </label>
+                  <label>
+                    <span>责任人</span>
+                    <select value={rule.owner} onChange={(event) => patchDraftRule(rule.id, { owner: event.target.value })}>
+                      {config.owners.filter((owner) => owner !== "待分派").map((owner) => <option key={`${rule.id}-${owner}`} value={owner}>{owner}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>复核人</span>
+                    <select value={rule.reviewer || config.assignmentRules?.fallbackReviewer || ""} onChange={(event) => patchDraftRule(rule.id, { reviewer: event.target.value })}>
+                      {config.reviewers.map((reviewer) => <option key={`${rule.id}-${reviewer}`} value={reviewer}>{reviewer}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>期限天数</span>
+                    <input type="number" min="1" max="365" value={rule.dueDays || config.assignmentRules?.dueDays || 7} onChange={(event) => patchDraftRule(rule.id, { dueDays: normalizeDueDays(event.target.value, config.assignmentRules?.dueDays || 7) })} />
+                  </label>
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
