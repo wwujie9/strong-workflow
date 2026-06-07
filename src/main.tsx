@@ -231,6 +231,17 @@ type RuleSimulationItem = {
   ownerChanged: boolean;
 };
 
+type RulePrioritySimulationItem = {
+  id: string;
+  code: string;
+  title: string;
+  previousRule: string;
+  nextRule: string;
+  previousOwner: string;
+  nextOwner: string;
+  ownerChanged: boolean;
+};
+
 type RuleConflictCheck = {
   level: "低" | "中" | "高";
   summary: string;
@@ -691,6 +702,34 @@ function matchAssignmentRule(hazard: Pick<Hazard, "category" | "title" | "descri
   const rules = config.assignmentRules?.keywordRules || [];
   const text = `${hazard.category}${hazard.title}${hazard.description}${hazard.location}`.toLowerCase();
   return rules.find((rule) => rule.keywords.some((keyword) => text.includes(keyword.toLowerCase())));
+}
+
+function matchAssignmentRuleFromRules(hazard: Pick<Hazard, "category" | "title" | "description" | "location">, rules: AssignmentRule[]) {
+  const text = `${hazard.category}${hazard.title}${hazard.description}${hazard.location}`.toLowerCase();
+  return rules.find((rule) => rule.keywords.some((keyword) => text.includes(keyword.toLowerCase())));
+}
+
+function buildRulePrioritySimulation(hazards: Hazard[], currentRules: AssignmentRule[], draftRules: AssignmentRule[], config: ProjectConfig): RulePrioritySimulationItem[] {
+  const fallbackOwner = config.assignmentRules?.fallbackOwner || config.owners.find((owner) => owner !== "待分派") || config.maintainerName;
+  return hazards
+    .map((hazard) => {
+      const previous = matchAssignmentRuleFromRules(hazard, currentRules);
+      const next = matchAssignmentRuleFromRules(hazard, draftRules);
+      const previousOwner = previous?.owner || fallbackOwner;
+      const nextOwner = next?.owner || fallbackOwner;
+      return {
+        id: hazard.id,
+        code: hazard.code,
+        title: hazard.title,
+        previousRule: previous?.label || "默认规则",
+        nextRule: next?.label || "默认规则",
+        previousOwner,
+        nextOwner,
+        ownerChanged: previousOwner !== nextOwner
+      };
+    })
+    .filter((item) => item.previousRule !== item.nextRule || item.ownerChanged)
+    .slice(0, 12);
 }
 
 function extractRuleKeywords(item: AssignmentSuggestionItem) {
@@ -2129,7 +2168,7 @@ function App() {
         templates={projectTemplates}
       />
 
-      <ProjectSetupPanel config={projectConfig} onChange={setProjectConfig} onExport={exportProjectConfig} onImport={importProjectConfig} />
+      <ProjectSetupPanel config={projectConfig} hazards={hazards} onChange={setProjectConfig} onExport={exportProjectConfig} onImport={importProjectConfig} />
       <CsvImportPanel
         importState={csvImport}
         onAddPeople={addCsvPeopleToConfig}
@@ -2840,11 +2879,13 @@ function SimulationRow({ item }: { item: RuleSimulationItem }) {
 
 function ProjectSetupPanel({
   config,
+  hazards,
   onChange,
   onExport,
   onImport
 }: {
   config: ProjectConfig;
+  hazards: Hazard[];
   onChange: (config: ProjectConfig) => void;
   onExport: () => void;
   onImport: (file: File) => void;
@@ -2904,7 +2945,112 @@ function ProjectSetupPanel({
           <textarea value={config.reviewers.join("\n")} onChange={(event) => patchConfig({ reviewers: normalizeNameList(event.target.value) })} />
         </Field>
       </div>
+      <RulePriorityPanel config={config} hazards={hazards} onChange={onChange} />
     </section>
+  );
+}
+
+function RulePriorityPanel({ config, hazards, onChange }: { config: ProjectConfig; hazards: Hazard[]; onChange: (config: ProjectConfig) => void }) {
+  const currentRules = config.assignmentRules?.keywordRules || [];
+  const [draftRules, setDraftRules] = useState<AssignmentRule[]>(currentRules);
+  const [draggedId, setDraggedId] = useState("");
+
+  useEffect(() => {
+    setDraftRules(currentRules);
+  }, [config.assignmentRules?.keywordRules]);
+
+  const changed = draftRules.map((rule) => rule.id).join("|") !== currentRules.map((rule) => rule.id).join("|");
+  const simulation = useMemo(() => buildRulePrioritySimulation(hazards, currentRules, draftRules, config), [config, currentRules, draftRules, hazards]);
+  const ownerChangeCount = simulation.filter((item) => item.ownerChanged).length;
+
+  function moveRule(index: number, direction: -1 | 1) {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= draftRules.length) return;
+    const nextRules = [...draftRules];
+    const [rule] = nextRules.splice(index, 1);
+    nextRules.splice(nextIndex, 0, rule);
+    setDraftRules(nextRules);
+  }
+
+  function dropRule(targetId: string) {
+    if (!draggedId || draggedId === targetId) return;
+    const dragged = draftRules.find((rule) => rule.id === draggedId);
+    const targetIndex = draftRules.findIndex((rule) => rule.id === targetId);
+    if (!dragged || targetIndex < 0) return;
+    const nextRules = draftRules.filter((rule) => rule.id !== draggedId);
+    nextRules.splice(targetIndex, 0, dragged);
+    setDraftRules(nextRules);
+    setDraggedId("");
+  }
+
+  function savePriority() {
+    onChange(normalizeProjectConfig({
+      ...config,
+      assignmentRules: {
+        ...config.assignmentRules!,
+        keywordRules: draftRules
+      }
+    }));
+  }
+
+  return (
+    <div className="rule-priority-panel">
+      <div className="rule-priority-head">
+        <div>
+          <strong>规则优先级管理</strong>
+          <p>越靠前越先命中。调整前先看全量模拟，避免改变责任人分派结果。</p>
+        </div>
+        <div className="rule-priority-actions">
+          <button className="ghost compact" disabled={!changed} onClick={() => setDraftRules(currentRules)}>撤销排序</button>
+          <button className="ghost compact" disabled={!changed} onClick={savePriority}>保存顺序</button>
+        </div>
+      </div>
+      <div className="priority-grid">
+        <div className="priority-list">
+          {draftRules.map((rule, index) => (
+            <div
+              className={draggedId === rule.id ? "priority-rule dragging" : "priority-rule"}
+              draggable
+              key={rule.id}
+              onDragEnd={() => setDraggedId("")}
+              onDragOver={(event) => event.preventDefault()}
+              onDragStart={() => setDraggedId(rule.id)}
+              onDrop={() => dropRule(rule.id)}
+            >
+              <span>{index + 1}</span>
+              <div>
+                <strong>{rule.label}</strong>
+                <small>{rule.keywords.join("、")} 到 {rule.owner}</small>
+              </div>
+              <div className="priority-buttons">
+                <button disabled={index === 0} onClick={() => moveRule(index, -1)}>上移</button>
+                <button disabled={index === draftRules.length - 1} onClick={() => moveRule(index, 1)}>下移</button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="priority-simulation">
+          <div className="simulation-head">
+            <strong>全量模拟</strong>
+            <span>影响 {simulation.length} 条 · 责任人变化 {ownerChangeCount} 条</span>
+          </div>
+          <div className="simulation-list">
+            {simulation.length ? (
+              simulation.map((item) => (
+                <div className={item.ownerChanged ? "simulation-row changed" : "simulation-row"} key={item.id}>
+                  <strong>{item.code}</strong>
+                  <span>{item.title}</span>
+                  <small>规则：{item.previousRule} 到 {item.nextRule}</small>
+                  <small>责任人：{item.previousOwner} 到 {item.nextOwner}</small>
+                </div>
+              ))
+            ) : (
+              <small>当前排序不会改变本批隐患的规则命中和责任人。</small>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
