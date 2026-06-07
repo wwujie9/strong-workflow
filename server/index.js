@@ -1,0 +1,503 @@
+import cors from "cors";
+import crypto from "node:crypto";
+import express from "express";
+import fs from "node:fs/promises";
+import fsSync from "node:fs";
+import https from "node:https";
+import multer from "multer";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const rootDir = path.resolve(__dirname, "..");
+const distDir = path.join(rootDir, "dist");
+
+function loadEnvFile(fileName) {
+  const filePath = path.join(rootDir, fileName);
+  if (!fsSync.existsSync(filePath)) return;
+  const lines = fsSync.readFileSync(filePath, "utf8").split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIndex = trimmed.indexOf("=");
+    if (eqIndex === -1) continue;
+    const key = trimmed.slice(0, eqIndex).trim();
+    const rawValue = trimmed.slice(eqIndex + 1).trim();
+    if (!key || process.env[key] !== undefined) continue;
+    process.env[key] = rawValue.replace(/^["']|["']$/g, "");
+  }
+}
+
+loadEnvFile(".env");
+loadEnvFile(".env.local");
+
+function resolveWorkspacePath(value, fallback) {
+  const input = value || fallback;
+  return path.isAbsolute(input) ? input : path.join(rootDir, input);
+}
+
+const host = process.env.HOST || "127.0.0.1";
+const port = Number(process.env.PORT || 5174);
+const publicBaseUrl = (process.env.PUBLIC_BASE_URL || `http://${host}:${port}`).replace(/\/$/, "");
+const dataFile = resolveWorkspacePath(process.env.DATA_FILE, "data/hazards.json");
+const dataDir = path.dirname(dataFile);
+const uploadDir = resolveWorkspacePath(process.env.UPLOAD_DIR, "server/uploads");
+const maxUploadMb = Number(process.env.MAX_UPLOAD_MB || 15);
+const httpsCertFile = process.env.HTTPS_CERT_FILE ? resolveWorkspacePath(process.env.HTTPS_CERT_FILE, "") : "";
+const httpsKeyFile = process.env.HTTPS_KEY_FILE ? resolveWorkspacePath(process.env.HTTPS_KEY_FILE, "") : "";
+const httpsEnabled = Boolean(httpsCertFile && httpsKeyFile && fsSync.existsSync(httpsCertFile) && fsSync.existsSync(httpsKeyFile));
+const reminderIntervalMinutes = Number(process.env.REMINDER_INTERVAL_MINUTES || 60);
+const reminderJobEnabled = process.env.ENABLE_REMINDER_JOB === "true";
+const allowedOrigins = Array.from(new Set((process.env.ALLOWED_ORIGINS || "http://127.0.0.1:5173,http://localhost:5173")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+  .concat(publicBaseUrl)));
+
+fsSync.mkdirSync(uploadDir, { recursive: true });
+
+const initialHazards = [
+  {
+    id: "hz-001",
+    code: "XF-2026-001",
+    project: "南城商业综合体",
+    location: "B1 停车场 A 区疏散通道",
+    category: "消防通道",
+    title: "疏散通道堆放杂物",
+    description: "月度维保检查发现通道被临时物料占用，影响人员疏散。",
+    suggestion: "清理全部杂物，设置禁止堆放标识，上传整改后照片。",
+    status: "待整改",
+    severity: "紧急",
+    owner: "物业工程-陈工",
+    reviewer: "安全负责人-周经理",
+    due: "2026-06-08",
+    beforeEvidence: ["维保报告第 3 项", "整改前照片 2 张"],
+    afterEvidence: [],
+    updated: "今天 09:12",
+    logs: ["维保报告导入", "机器人分派给物业工程-陈工", "到期前 24 小时自动提醒"]
+  },
+  {
+    id: "hz-002",
+    code: "XF-2026-002",
+    project: "南城商业综合体",
+    location: "3F 餐饮区 3-18 商户",
+    category: "灭火器",
+    title: "灭火器压力不足",
+    description: "现场抽查发现 2 具灭火器压力指针处于黄色区域。",
+    suggestion: "更换或重新充装灭火器，上传更换凭证和现场照片。",
+    status: "待复核",
+    severity: "普通",
+    owner: "商户负责人-王店长",
+    reviewer: "维保项目-李工",
+    due: "2026-06-10",
+    beforeEvidence: ["巡检照片 1 张", "设备编号：MFZ/ABC4-0318"],
+    afterEvidence: ["整改后照片 2 张", "更换凭证截图"],
+    updated: "今天 10:40",
+    logs: ["商户通过链接提交整改", "机器人通知维保项目-李工复核"]
+  }
+];
+
+function createPilotHazards() {
+  const templates = [
+    ["消防通道", "B1 停车场疏散通道堆放杂物", "清理杂物并上传整改后照片"],
+    ["灭火器", "商户灭火器压力不足", "更换或重新充装灭火器并上传凭证"],
+    ["防火门", "防火门闭门器失效", "维修闭门器并提交自动闭合视频"],
+    ["喷淋遮挡", "货物堆放高度遮挡喷淋", "调整堆放高度并上传前后对比照片"],
+    ["应急照明", "应急照明灯不亮", "更换灯具或电池并上传测试照片"],
+    ["报警系统", "手动报警按钮标识脱落", "补齐标识并上传现场照片"]
+  ];
+
+  return Array.from({ length: 30 }, (_, index) => {
+    const [category, title, suggestion] = templates[index % templates.length];
+    const number = index + 1;
+    const severity = category === "防火门" || category === "消防通道" ? "紧急" : "普通";
+    return {
+      id: `pilot-${String(number).padStart(3, "0")}`,
+      code: `XF-PILOT-${String(number).padStart(3, "0")}`,
+      project: "南城商业综合体试点",
+      location: `${Math.floor(index / 6) + 1}F ${String.fromCharCode(65 + (index % 6))} 区`,
+      category,
+      title,
+      description: `第 ${index + 1} 条试点隐患：${title}。`,
+      suggestion,
+      status: "待分派",
+      severity,
+      owner: "待分派",
+      reviewer: "安全负责人-周经理",
+      due: "2026-06-12",
+      beforeEvidence: [`试点报告第 ${index + 1} 项`],
+      afterEvidence: [],
+      updated: "刚刚",
+      logs: ["30 条试点隐患批量生成，等待分派责任人"]
+    };
+  });
+}
+
+function createRealTemplateHazards() {
+  const rows = [
+    ["1号楼 B1 配电间前室", "消防通道", "前室堆放清洁工具，影响应急疏散", "物业工程-陈工", "紧急"],
+    ["1号楼 2F 东侧楼梯间", "防火门", "防火门闭门器回弹无力，无法自动闭合", "外包维修-赵师傅", "重大"],
+    ["1号楼 4F 共享办公区", "应急照明", "应急照明灯断电测试不亮", "物业工程-陈工", "普通"],
+    ["1号楼 6F 走廊", "报警系统", "手动报警按钮标识脱落", "维保项目-李工", "普通"],
+    ["2号楼 1F 大堂", "灭火器", "灭火器压力指针偏低", "物业客服-沈主管", "普通"],
+    ["2号楼 3F 西侧茶水间", "喷淋遮挡", "高柜遮挡喷淋头覆盖范围", "租户负责人-王店长", "紧急"],
+    ["2号楼 5F 北侧消防栓", "消防栓", "消防栓箱门开启不顺畅", "外包维修-赵师傅", "普通"],
+    ["3号楼 B1 车库 C 区", "消防通道", "疏散指示牌被广告牌遮挡", "物业工程-陈工", "紧急"],
+    ["3号楼 2F 西侧防火门", "防火门", "防火门顺序器损坏", "外包维修-赵师傅", "重大"],
+    ["3号楼 8F 会议区", "应急照明", "安全出口灯面板松动", "物业工程-陈工", "普通"]
+  ];
+
+  return Array.from({ length: 30 }, (_, index) => {
+    const [location, category, title, owner, severity] = rows[index % rows.length];
+    const number = index + 1;
+    return {
+      id: `real-${String(number).padStart(3, "0")}`,
+      code: `XF-REAL-${String(number).padStart(3, "0")}`,
+      project: "青浦智造产业园消防维保试点",
+      location: `${location}${index >= rows.length ? ` 第 ${Math.floor(index / rows.length) + 1} 轮复查` : ""}`,
+      category,
+      title,
+      description: `现场维保检查发现：${title}。该问题需责任人在整改期限内提交照片或视频证据。`,
+      suggestion: "按消防维保意见完成整改，上传整改后照片；涉及防火门、报警系统的隐患需补充短视频或复测说明。",
+      status: index < 6 ? "待整改" : "待分派",
+      severity,
+      owner: index < 6 ? owner : "待分派",
+      reviewer: index % 3 === 0 ? "安全负责人-周经理" : "维保项目-李工",
+      due: index < 10 ? "2026-06-12" : "2026-06-15",
+      beforeEvidence: [`真实模板维保报告第 ${number} 项`, `点位：${location}`],
+      afterEvidence: [],
+      updated: "刚刚",
+      logs: ["真实试点模板初始化", index < 6 ? `已预分派给 ${owner}` : "等待物业负责人分派责任人"]
+    };
+  });
+}
+
+async function ensureDataFile() {
+  await fs.mkdir(dataDir, { recursive: true });
+  try {
+    await fs.access(dataFile);
+  } catch {
+    await fs.writeFile(dataFile, JSON.stringify(initialHazards, null, 2), "utf8");
+  }
+}
+
+async function readHazards() {
+  await ensureDataFile();
+  const raw = await fs.readFile(dataFile, "utf8");
+  return JSON.parse(raw);
+}
+
+async function writeHazards(hazards) {
+  await fs.mkdir(dataDir, { recursive: true });
+  const tmpFile = `${dataFile}.tmp`;
+  await fs.writeFile(tmpFile, JSON.stringify(hazards, null, 2), "utf8");
+  await fs.rename(tmpFile, dataFile);
+}
+
+function isValidHazard(hazard) {
+  const statuses = new Set(["待分派", "待整改", "待复核", "已驳回", "已闭环", "已逾期"]);
+  const severities = new Set(["重大", "紧急", "普通"]);
+  return (
+    hazard &&
+    typeof hazard.id === "string" &&
+    typeof hazard.code === "string" &&
+    typeof hazard.project === "string" &&
+    typeof hazard.location === "string" &&
+    typeof hazard.title === "string" &&
+    statuses.has(hazard.status) &&
+    severities.has(hazard.severity) &&
+    Array.isArray(hazard.beforeEvidence) &&
+    Array.isArray(hazard.afterEvidence) &&
+    Array.isArray(hazard.logs)
+  );
+}
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, callback) => callback(null, uploadDir),
+  filename: (_req, file, callback) => {
+    const safeName = file.originalname.replace(/[^\w.\-\u4e00-\u9fa5]/g, "_");
+    callback(null, `${Date.now()}-${safeName}`);
+  }
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: maxUploadMb * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    // 试点阶段只放行整改常用证据类型，避免任意文件写入风险。
+    const allowedMimes = [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/gif",
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.ms-excel",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "text/plain"
+    ];
+    const allowedExts = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".txt"]);
+    const ext = path.extname(file.originalname).toLowerCase();
+    callback(null, allowedMimes.includes(file.mimetype) || allowedExts.has(ext));
+  }
+});
+
+async function postJson(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  return { ok: response.ok, status: response.status, text: await response.text() };
+}
+
+function buildDingTalkWebhookUrl() {
+  const webhook = process.env.DINGTALK_WEBHOOK_URL;
+  const secret = process.env.DINGTALK_SECRET;
+  if (!webhook || !secret) return webhook;
+  const timestamp = Date.now();
+  const signBase = `${timestamp}\n${secret}`;
+  const sign = crypto.createHmac("sha256", secret).update(signBase).digest("base64");
+  const url = new URL(webhook);
+  url.searchParams.set("timestamp", String(timestamp));
+  url.searchParams.set("sign", sign);
+  return url.toString();
+}
+
+async function sendWebhook({ title, text }) {
+  const results = [];
+  if (process.env.WECOM_WEBHOOK_URL) {
+    results.push(
+      await postJson(process.env.WECOM_WEBHOOK_URL, {
+        msgtype: "markdown",
+        markdown: { content: `**${title}**\n\n${text}` }
+      })
+    );
+  }
+  if (process.env.DINGTALK_WEBHOOK_URL) {
+    results.push(
+      await postJson(buildDingTalkWebhookUrl(), {
+        msgtype: "markdown",
+        markdown: { title, text: `### ${title}\n${text}` }
+      })
+    );
+  }
+  return results;
+}
+
+function dayStamp() {
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+function parseDueDate(value) {
+  const date = new Date(`${value}T23:59:59+08:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+async function runReminderScan({ force = false } = {}) {
+  const hazards = await readHazards();
+  const now = new Date();
+  const soon = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const stamp = dayStamp();
+  let changed = false;
+  const reminders = [];
+
+  const nextHazards = hazards.map((hazard) => {
+    if (hazard.status === "已闭环" || hazard.status === "待分派") return hazard;
+    const dueDate = parseDueDate(hazard.due);
+    if (!dueDate) return hazard;
+    const overdue = dueDate.getTime() < now.getTime();
+    const dueSoon = dueDate.getTime() <= soon.getTime();
+    if (!force && !overdue && !dueSoon) return hazard;
+    const reminderKey = `自动催办:${stamp}`;
+    if (!force && hazard.logs.some((log) => log.includes(reminderKey))) return hazard;
+
+    const nextStatus = overdue ? "已逾期" : hazard.status;
+    const message = `${reminderKey} ${hazard.code} ${overdue ? "已逾期" : "即将到期"}，已提醒 ${hazard.owner}，复核人 ${hazard.reviewer}`;
+    reminders.push({
+      code: hazard.code,
+      owner: hazard.owner,
+      reviewer: hazard.reviewer,
+      due: hazard.due,
+      overdue,
+      status: nextStatus
+    });
+    changed = true;
+    return {
+      ...hazard,
+      status: nextStatus,
+      updated: "自动催办",
+      logs: [message, ...hazard.logs]
+    };
+  });
+
+  if (changed) {
+    await writeHazards(nextHazards);
+    await sendWebhook({
+      title: "自动催办提醒",
+      text: reminders.map((item) => `- ${item.code} ${item.overdue ? "已逾期" : "即将到期"}，责任人：${item.owner}，期限：${item.due}`).join("\n")
+    });
+  }
+
+  return { ok: true, count: reminders.length, reminders };
+}
+
+const app = express();
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`CORS origin not allowed: ${origin}`));
+    }
+  })
+);
+app.use(express.json({ limit: "2mb" }));
+app.use("/uploads", express.static(uploadDir));
+
+app.get("/api/health", (_req, res) => {
+  res.json({
+    ok: true,
+    host,
+    port,
+    publicBaseUrl,
+    dataFile,
+    uploadDir,
+    maxUploadMb,
+    allowedOrigins,
+    httpsEnabled,
+    httpsCertConfigured: Boolean(httpsCertFile),
+    httpsKeyConfigured: Boolean(httpsKeyFile),
+    reminderJobEnabled,
+    reminderIntervalMinutes,
+    wecomConfigured: Boolean(process.env.WECOM_WEBHOOK_URL),
+    dingtalkConfigured: Boolean(process.env.DINGTALK_WEBHOOK_URL),
+    dingtalkSignConfigured: Boolean(process.env.DINGTALK_SECRET)
+  });
+});
+
+app.get("/api/hazards", async (_req, res) => {
+  res.json(await readHazards());
+});
+
+app.put("/api/hazards", async (req, res) => {
+  if (!Array.isArray(req.body)) {
+    res.status(400).json({ error: "hazards must be an array" });
+    return;
+  }
+  if (!req.body.every(isValidHazard)) {
+    res.status(400).json({ error: "hazards contain invalid records" });
+    return;
+  }
+  await writeHazards(req.body);
+  res.json({ ok: true, count: req.body.length });
+});
+
+app.post("/api/reset", async (_req, res) => {
+  await writeHazards(initialHazards);
+  res.json({ ok: true, hazards: initialHazards });
+});
+
+app.post("/api/seed-pilot", async (_req, res) => {
+  const hazards = createPilotHazards();
+  await writeHazards(hazards);
+  res.json({ ok: true, count: hazards.length, hazards });
+});
+
+app.post("/api/seed-real-template", async (_req, res) => {
+  const hazards = createRealTemplateHazards();
+  await writeHazards(hazards);
+  res.json({ ok: true, count: hazards.length, hazards });
+});
+
+app.post("/api/upload", upload.single("file"), (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ error: "missing file" });
+    return;
+  }
+  res.json({
+    originalName: req.file.originalname,
+    storedName: req.file.filename,
+    url: `/uploads/${req.file.filename}`,
+    publicUrl: `${publicBaseUrl}/uploads/${encodeURIComponent(req.file.filename)}`
+  });
+});
+
+app.post("/api/notify", async (req, res) => {
+  const { title = "消防整改闭环助手", text = "" } = req.body ?? {};
+  if (!process.env.WECOM_WEBHOOK_URL && !process.env.DINGTALK_WEBHOOK_URL) {
+    console.log(`[notify:dry-run] ${title}\n${text}`);
+    res.json({ ok: true, dryRun: true });
+    return;
+  }
+  try {
+    res.json({ ok: true, results: await sendWebhook({ title, text }) });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
+app.post("/api/reminders/run", async (req, res) => {
+  try {
+    res.json(await runReminderScan({ force: Boolean(req.body?.force) }));
+  } catch (error) {
+    res.status(500).json({ ok: false, error: String(error.message || error) });
+  }
+});
+
+app.use("/api", (_req, res) => {
+  res.status(404).json({ ok: false, error: "api route not found" });
+});
+
+app.use(express.static(distDir));
+app.get("*", (_req, res) => {
+  res.sendFile(path.join(distDir, "index.html"));
+});
+
+app.use((error, _req, res, _next) => {
+  if (error instanceof multer.MulterError) {
+    res.status(400).json({ ok: false, error: error.message });
+    return;
+  }
+  res.status(500).json({ ok: false, error: String(error.message || error) });
+});
+
+const server = httpsEnabled
+  ? https
+      .createServer(
+        {
+          cert: fsSync.readFileSync(httpsCertFile),
+          key: fsSync.readFileSync(httpsKeyFile)
+        },
+        app
+      )
+      .listen(port, host, onServerReady)
+  : app.listen(port, host, onServerReady);
+
+function onServerReady() {
+  console.log(`消防整改闭环助手已启动：${publicBaseUrl}`);
+  console.log(`HTTPS：${httpsEnabled ? "enabled" : "disabled"}`);
+  console.log(`数据文件：${dataFile}`);
+  console.log(`上传目录：${uploadDir}`);
+  if (reminderJobEnabled) {
+    console.log(`自动催办任务：每 ${reminderIntervalMinutes} 分钟扫描一次`);
+  }
+}
+
+if (reminderJobEnabled) {
+  setInterval(() => {
+    runReminderScan().catch((error) => console.error(`自动催办任务失败：${String(error.message || error)}`));
+  }, Math.max(1, reminderIntervalMinutes) * 60 * 1000);
+}
+
+server.on("error", (error) => {
+  if (error.code === "EADDRINUSE") {
+    console.error(`端口已被占用：${host}:${port}。请修改 .env.local 里的 PORT，或关闭占用该端口的进程。`);
+    process.exit(1);
+  }
+  console.error(error);
+  process.exit(1);
+});

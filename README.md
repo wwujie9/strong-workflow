@@ -1,0 +1,141 @@
+# 消防整改闭环助手 MVP
+
+面向物业、园区、消防维保公司的轻量整改闭环试点工具。它不替换客户原有后台，而是通过群机器人、H5 整改链接、复核链接、文件证据和闭环包，把维保报告里的隐患变成可执行流程。
+
+上线前请先逐项核对 [LAUNCH_CHECKLIST.md](D:/1pro/strong-workflow/LAUNCH_CHECKLIST.md)，并用 [RISK_REGISTER.md](D:/1pro/strong-workflow/RISK_REGISTER.md) 做上线评审。这两份文件覆盖公网 HTTPS、机器人、真实数据、人员名单、手机端测试、备份、自动催办、PDF 闭环包、当前已知不足和阻塞上线风险。
+
+## 端口与配置
+
+本地固定配置在 `.env.local`，可参考 `.env.example`。
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `HOST` | `127.0.0.1` | 后端监听地址 |
+| `PORT` | `5174` | 生产服务和 API 端口 |
+| `PUBLIC_BASE_URL` | `http://127.0.0.1:5174` | 生成整改/复核/上传文件公开链接时使用 |
+| `HTTPS_CERT_FILE` | 空 | HTTPS 证书文件路径，配置后由 Node 直接启用 HTTPS |
+| `HTTPS_KEY_FILE` | 空 | HTTPS 私钥文件路径 |
+| `VITE_API_BASE` | `http://127.0.0.1:5174/api` | 开发前端访问 API 的地址 |
+| `DATA_FILE` | `data/hazards.json` | 隐患数据落盘位置 |
+| `UPLOAD_DIR` | `server/uploads` | 整改图片/文件上传目录 |
+| `MAX_UPLOAD_MB` | `15` | 单文件上传大小上限 |
+| `ALLOWED_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5174` | CORS 白名单 |
+| `WECOM_WEBHOOK_URL` | 空 | 企业微信群机器人 Webhook |
+| `DINGTALK_WEBHOOK_URL` | 空 | 钉钉机器人 Webhook |
+| `DINGTALK_SECRET` | 空 | 钉钉机器人加签密钥 |
+| `ENABLE_REMINDER_JOB` | `false` | 是否启用自动催办定时任务 |
+| `REMINDER_INTERVAL_MINUTES` | `60` | 自动催办扫描间隔 |
+
+## 启动
+
+```powershell
+npm install
+npm run build
+npm run server
+```
+
+打开：
+
+```text
+http://127.0.0.1:5174
+```
+
+健康检查：
+
+```text
+http://127.0.0.1:5174/api/health
+```
+
+开发模式：
+
+```powershell
+npm run dev
+npm run server
+```
+
+开发前端端口固定为 `5173`，后端/API 端口固定为 `5174`。
+
+## 试点流程
+
+1. 打开页面，先查看“配置与上线检查”，确认端口、公开链接、上传目录和机器人状态。
+2. 点击“真实模板”，载入 30 条更接近客户现场的试点隐患。
+3. 选择一条隐患，使用责任人/复核人下拉名单补齐人员和期限。
+4. 点击“生成整改链接”，系统发送机器人通知。
+5. 点击“复制整改链接”或“复制复核链接”，可直接粘贴到企业微信或钉钉群。
+6. 打开整改页，上传整改图片或文件；图片证据会在证据区显示缩略图。
+7. 可在左侧选择多条隐患，批量设置责任人、复核人和期限。
+8. 打开复核页，复核通过或驳回。
+9. 点击“导出闭环包”生成 HTML 归档包，点击“PDF闭环包”打开打印页并另存为 PDF。
+
+演示数据入口：
+
+```text
+生成30条试点：通用模拟数据
+真实模板：青浦智造产业园消防维保试点，30 条真实化点位数据
+```
+
+## 状态机保护
+
+当前前端已做基础状态保护：
+
+```text
+待分派：不能提交整改证据，不能上传整改文件
+待整改：可以提交/上传整改证据，提交后进入待复核
+待复核：可以复核通过或驳回，不能重复提交证据
+已驳回：可以重新提交/上传证据，提交后回到待复核
+已逾期：可以重新提交/上传证据，提交后回到待复核
+已闭环：不能重新分派、上传、驳回或催办
+没有整改后证据：不能复核通过
+```
+
+## 机器人配置
+
+企业微信：
+
+```powershell
+$env:WECOM_WEBHOOK_URL='https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=你的key'
+npm run server
+```
+
+钉钉：
+
+```powershell
+$env:DINGTALK_WEBHOOK_URL='https://oapi.dingtalk.com/robot/send?access_token=你的access_token'
+$env:DINGTALK_SECRET='SECxxxxxxxx'
+npm run server
+```
+
+未配置机器人时，通知接口会返回 `dryRun: true`，不会真实发送外部消息。
+
+## HTTPS 与自动催办
+
+若由 Node 直接提供 HTTPS：
+
+```powershell
+$env:HOST='0.0.0.0'
+$env:PORT='443'
+$env:PUBLIC_BASE_URL='https://xf-flow.example.com'
+$env:HTTPS_CERT_FILE='certs/fullchain.pem'
+$env:HTTPS_KEY_FILE='certs/privkey.pem'
+npm run server
+```
+
+若前面使用 Nginx、宝塔、Cloudflare Tunnel 等反向代理，Node 仍可监听 `127.0.0.1:5174`，只需把 `PUBLIC_BASE_URL` 和 `ALLOWED_ORIGINS` 改成公网 HTTPS 域名。
+
+自动催办：
+
+```powershell
+$env:ENABLE_REMINDER_JOB='true'
+$env:REMINDER_INTERVAL_MINUTES='60'
+npm run server
+```
+
+也可以手动触发：
+
+```text
+POST http://127.0.0.1:5174/api/reminders/run
+```
+
+## 当前边界
+
+这版适合跑 1 个真实物业/园区/维保项目的 MVP 试点，不是完整 SaaS。还没有做账号体系、多租户隔离、数据库、文件病毒扫描、HTTPS、公网域名和不可篡改审计。若要进入正式商用，这些需要进入下一阶段。
